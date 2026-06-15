@@ -8,4 +8,5 @@ members = [
     "path_util",
     "util",
     "winutil",
+    "ini_file",
 ]

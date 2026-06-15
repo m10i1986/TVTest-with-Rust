@@ -9,11 +9,16 @@ description = "Rust port of TVTest's Win32-dependent Util functions (OS version 
 name = "tvtest_winutil"
 path = "src/lib.rs"
 
+[dependencies]
+tvtest_path_util = { path = "../path_util" }
+
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Diagnostics_Debug",

@@ -1,0 +1,10 @@
+[package]
+name = "tvtest_ini_file"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CIniFile core (in-memory INI parse/serialize/CRUD)"
+
+[lib]
+name = "tvtest_ini_file"
+path = "src/lib.rs"

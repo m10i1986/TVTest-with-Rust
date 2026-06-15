@@ -35,7 +35,11 @@ use windows::Win32::System::SystemInformation::{
     VER_MINORVERSION,
 };
 use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
+use windows::Win32::Storage::FileSystem::{GetFileAttributesW, INVALID_FILE_ATTRIBUTES};
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::SystemServices::{VER_EQUAL, VER_GREATER_EQUAL, VER_LESS};
+
+use tvtest_path_util as path_util;
 
 /// Windows の `MAX_PATH`。
 pub const MAX_PATH: usize = 260;
@@ -342,6 +346,131 @@ pub fn is_valid_file_name(name: &[u16], flags: FileNameValidateFlag) -> Validate
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// パス(実行ファイル基準・存在確認)
+// ---------------------------------------------------------------------------
+
+/// パスが存在するか(ファイル/ディレクトリを問わず)。Win32 `PathFileExists` 相当。
+/// `GetFileAttributesW` が `INVALID_FILE_ATTRIBUTES` 以外を返すかで判定する。
+pub fn path_exists(path: &[u16]) -> bool {
+    let mut buf: Vec<u16> = path.to_vec();
+    buf.push(0); // NUL 終端
+    let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(buf.as_ptr())) };
+    attrs != INVALID_FILE_ATTRIBUTES
+}
+
+/// 自プロセスの実行ファイルのフルパスを取得する。Win32 `GetModuleFileNameW(nullptr, ...)` 相当。
+pub fn get_module_file_name() -> Vec<u16> {
+    let mut buf = [0u16; MAX_PATH];
+    let len = unsafe { GetModuleFileNameW(None, &mut buf) };
+    buf[..len as usize].to_vec()
+}
+
+/// 相対パスを実行ファイルのあるディレクトリ基準で絶対パス化する。
+/// 原実装 `GetAbsolutePath`(String 版) (Util.cpp:843)。
+///
+/// 既に絶対パスならそのまま返す。空入力や正規化失敗で `None`。
+pub fn get_absolute_path(file_path: &[u16]) -> Option<Vec<u16>> {
+    if file_path.is_empty() {
+        return None;
+    }
+    if path_util::is_relative(file_path) {
+        // 実行ファイルパスからファイル名を除いたディレクトリを基準にする。
+        let mut dir = get_module_file_name();
+        // 原実装 PathRemoveFileSpec 相当(末尾のファイル名を除去)。
+        path_util::remove_file_name(&mut dir);
+        path_util::relative_to_absolute(&dir, file_path)
+    } else {
+        Some(file_path.to_vec())
+    }
+}
+
+/// ファイル名が既存と衝突する場合、連番を付けて一意なパスを作る。
+/// 原実装 `MakeUniqueFileName` (Util.cpp:760)。
+///
+/// `max_length` は生成パスの最大長、`number_format` は連番書式(`None` なら `-{n}`)。
+/// 連番は 2 から始め、`MAX_NUMBER`(1000)未満まで試す。成功時に新パスを返す。
+///
+/// `number_format` は `{}` を連番に置換するシンプルな書式とする(原実装の `StringVFormat` 相当範囲)。
+pub fn make_unique_file_name(
+    file_name: &[u16],
+    max_length: usize,
+    number_format: Option<&str>,
+) -> Option<Vec<u16>> {
+    if file_name.is_empty() {
+        return None;
+    }
+
+    // ディレクトリ部の長さ(末尾区切りまで含む)。PathFindFileName 相当。
+    let dir_length = dir_prefix_len(file_name);
+    if dir_length == 0 || dir_length > max_length.saturating_sub(1) {
+        return None;
+    }
+
+    let extension = path_util::get_extension(file_name);
+    let extension_length = extension.len();
+    let max_file_name = max_length - dir_length;
+
+    // まず長さ制限に収める。
+    let mut path: Vec<u16> = file_name.to_vec();
+    if path.len() > max_length {
+        if extension_length < max_file_name {
+            path.truncate(max_length - extension_length);
+            path.extend_from_slice(&extension);
+        } else {
+            path.truncate(max_length);
+        }
+    }
+
+    if path_exists(&path) {
+        const MAX_NUMBER: i32 = 1000;
+        // 拡張子を除いたファイル名本体(ディレクトリ部以降)。
+        let base_name: Vec<u16> =
+            file_name[dir_length..file_name.len() - extension_length].to_vec();
+        let fmt = number_format.unwrap_or("-{}");
+
+        let mut i = 2;
+        loop {
+            if i == MAX_NUMBER {
+                return None;
+            }
+            let number: Vec<u16> = fmt.replace("{}", &i.to_string()).encode_utf16().collect();
+
+            let mut name = base_name.clone();
+            name.extend_from_slice(&number);
+            name.extend_from_slice(&extension);
+
+            let mut candidate: Vec<u16> = file_name[..dir_length].to_vec();
+            if name.len() <= max_file_name {
+                candidate.extend_from_slice(&name);
+            } else {
+                // 長すぎる場合は末尾 max_file_name 文字を採用。
+                candidate.extend_from_slice(&name[name.len() - max_file_name..]);
+            }
+
+            if !path_exists(&candidate) {
+                path = candidate;
+                break;
+            }
+            i += 1;
+        }
+    }
+
+    Some(path)
+}
+
+/// パスからファイル名を除いた接頭辞(ディレクトリ部 + 区切り)の長さを返す。
+/// Win32 `PathFindFileName(p) - p` 相当(最後の区切りの次の位置)。
+fn dir_prefix_len(path: &[u16]) -> usize {
+    match path
+        .iter()
+        .rposition(|&c| c == b'\\' as u16 || c == b'/' as u16)
+    {
+        Some(pos) => pos + 1,
+        None => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +584,72 @@ mod tests {
         assert!(is_valid_file_name(&u("file."), f).is_err()); // 末尾ドット
         // 途中のドットは OK
         assert!(is_valid_file_name(&u("a.b.c"), f).is_ok());
+    }
+
+    #[test]
+    fn test_path_exists() {
+        // 実行ファイル自身は存在するはず。
+        let exe = get_module_file_name();
+        assert!(!exe.is_empty());
+        assert!(path_exists(&exe));
+
+        // 存在しないであろうパス
+        assert!(!path_exists(&u("Z:\\no_such_dir\\no_such_file_xyz.tmp")));
+    }
+
+    #[test]
+    fn test_get_module_file_name_is_absolute() {
+        let exe = get_module_file_name();
+        assert!(path_util::is_absolute(&exe));
+    }
+
+    #[test]
+    fn test_get_absolute_path() {
+        // 既に絶対パスならそのまま。
+        let abs = u("C:\\dir\\file.txt");
+        assert_eq!(get_absolute_path(&abs).unwrap(), abs);
+
+        // 相対パスは実行ファイルのディレクトリ基準で絶対化される。
+        let r = get_absolute_path(&u("config.ini")).unwrap();
+        assert!(path_util::is_absolute(&r));
+        assert!(from(&r).ends_with("config.ini"));
+
+        // 空は None。
+        assert!(get_absolute_path(&u("")).is_none());
+    }
+
+    #[test]
+    fn test_make_unique_file_name_no_conflict() {
+        // 存在しないパスはそのまま返る。
+        let p = u("Z:\\no_such_dir\\unique_name.txt");
+        let r = make_unique_file_name(&p, MAX_PATH - 1, None).unwrap();
+        assert_eq!(r, p);
+    }
+
+    #[test]
+    fn test_make_unique_file_name_with_conflict() {
+        // 一時ディレクトリに実ファイルを作って衝突を再現する。
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("tvtest_winutil_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let base = dir.join("sample.txt");
+        std::fs::write(&base, b"x").unwrap();
+
+        let base_u: Vec<u16> = base.to_string_lossy().encode_utf16().collect();
+        let unique = make_unique_file_name(&base_u, MAX_PATH - 1, None).unwrap();
+
+        // 衝突したので別名(sample-2.txt)になっているはず。
+        let unique_s = from(&unique);
+        assert_ne!(unique, base_u);
+        assert!(unique_s.contains("sample-2.txt"), "got: {}", unique_s);
+        assert!(!path_exists(&unique));
+
+        // 後始末。
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn from(s: &[u16]) -> String {
+        String::from_utf16_lossy(s)
     }
 }
