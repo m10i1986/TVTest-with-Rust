@@ -6,4 +6,5 @@ resolver = "2"
 members = [
     "string_utility",
     "path_util",
+    "util",
 ]
