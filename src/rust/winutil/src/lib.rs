@@ -34,7 +34,11 @@ use windows::Win32::System::SystemInformation::{
     VerSetConditionMask, VerifyVersionInfoW, OSVERSIONINFOEXW, VER_BUILDNUMBER, VER_MAJORVERSION,
     VER_MINORVERSION,
 };
+use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
 use windows::Win32::System::SystemServices::{VER_EQUAL, VER_GREATER_EQUAL, VER_LESS};
+
+/// Windows の `MAX_PATH`。
+pub const MAX_PATH: usize = 260;
 
 // 原実装の `OS` 名前空間に相当。
 
@@ -244,6 +248,100 @@ pub fn get_error_text(error_code: u32) -> String {
     String::from_utf16_lossy(&buffer[..length as usize])
 }
 
+// ---------------------------------------------------------------------------
+// ファイル名
+// ---------------------------------------------------------------------------
+
+/// 2つのファイル名を大文字小文字を無視して比較し、等しいか判定する。
+/// 原実装 `IsEqualFileName` (Util.cpp:665)。`CompareStringOrdinal` を使用。
+pub fn is_equal_file_name(name1: &[u16], name2: &[u16]) -> bool {
+    // -1 ではなくスライス長を渡す(NUL 終端に依存しない)。
+    unsafe { CompareStringOrdinal(name1, name2, true) == CSTR_EQUAL }
+}
+
+/// [`is_valid_file_name`] のフラグ。原実装 `FileNameValidateFlag` (Util.h:105)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FileNameValidateFlag {
+    /// ワイルドカード `*` `?` を許可する。
+    pub wildcard: bool,
+    /// パス区切り `\` を許可する。
+    pub allow_delimiter: bool,
+}
+
+/// ファイル名検証の結果。`Ok(())` なら有効、`Err(メッセージ)` なら無効。
+pub type ValidateResult = Result<(), String>;
+
+/// 予約デバイス名(CON/PRN/AUX/NUL/COM1-9/LPT1-9)に大小無視で一致するか。
+fn is_reserved_device_name(name: &[u16]) -> bool {
+    fn eq_ascii_ci(name: &[u16], target: &str) -> bool {
+        let t: Vec<u16> = target.encode_utf16().collect();
+        if name.len() != t.len() {
+            return false;
+        }
+        name.iter().zip(t.iter()).all(|(&a, &b)| {
+            let la = if (b'A' as u16..=b'Z' as u16).contains(&a) { a + 32 } else { a };
+            let lb = if (b'A' as u16..=b'Z' as u16).contains(&b) { b + 32 } else { b };
+            la == lb
+        })
+    }
+
+    match name.len() {
+        3 => ["CON", "PRN", "AUX", "NUL"]
+            .iter()
+            .any(|d| eq_ascii_ci(name, d)),
+        4 => (1..=9).any(|i| {
+            eq_ascii_ci(name, &format!("COM{}", i)) || eq_ascii_ci(name, &format!("LPT{}", i))
+        }),
+        _ => false,
+    }
+}
+
+/// ファイル名として有効か検証する。原実装 `IsValidFileName` (Util.cpp:671)。
+///
+/// 予約デバイス名・禁止文字・長さ・末尾の空白/ドットを検査する。
+/// 文字検証は ASCII の禁止文字に基づくため Win32 非依存だが、本クレートに置いて
+/// `is_equal_file_name` などのファイル名系 API と集約する。
+pub fn is_valid_file_name(name: &[u16], flags: FileNameValidateFlag) -> ValidateResult {
+    if name.is_empty() {
+        return Err("ファイル名が指定されていません。".to_string());
+    }
+    if name.len() >= MAX_PATH {
+        return Err("ファイル名が長すぎます。".to_string());
+    }
+    if is_reserved_device_name(name) {
+        return Err("仮想デバイス名はファイル名に使用できません。".to_string());
+    }
+
+    for (i, &c) in name.iter().enumerate() {
+        let is_forbidden = c <= 31
+            || c == b'<' as u16
+            || c == b'>' as u16
+            || c == b':' as u16
+            || c == b'"' as u16
+            || c == b'/' as u16
+            || c == b'|' as u16
+            || (!flags.wildcard && (c == b'*' as u16 || c == b'?' as u16))
+            || (!flags.allow_delimiter && c == b'\\' as u16);
+        if is_forbidden {
+            let msg = if c <= 31 {
+                // 原実装の "{:#02x}" 相当(0x プレフィックス付き)。
+                format!("ファイル名に使用できない文字 {:#02x} が含まれています。", c)
+            } else {
+                let ch = char::from_u32(c as u32).unwrap_or('?');
+                format!("ファイル名に使用できない文字 {} が含まれています。", ch)
+            };
+            return Err(msg);
+        }
+        // 末尾の半角空白・ドットは不可。
+        let is_last = i + 1 == name.len();
+        if is_last && (c == b' ' as u16 || c == b'.' as u16) {
+            return Err("ファイル名の末尾に半角空白及び . は使用できません。".to_string());
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +388,72 @@ mod tests {
         // 存在しないであろう巨大なコードは空文字列になることが多い。
         // (環境によりメッセージを返す可能性もあるためパニックしないことのみ確認)
         let _ = get_error_text(0xFFFF_FFFE);
+    }
+
+    fn u(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
+    #[test]
+    fn test_is_equal_file_name() {
+        assert!(is_equal_file_name(&u("File.txt"), &u("file.TXT")));
+        assert!(is_equal_file_name(&u("abc"), &u("abc")));
+        assert!(!is_equal_file_name(&u("abc"), &u("abd")));
+    }
+
+    #[test]
+    fn test_is_valid_file_name_ok() {
+        let f = FileNameValidateFlag::default();
+        assert!(is_valid_file_name(&u("normal_file.txt"), f).is_ok());
+        assert!(is_valid_file_name(&u("日本語ファイル.mp4"), f).is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_file_name_empty() {
+        let f = FileNameValidateFlag::default();
+        assert!(is_valid_file_name(&u(""), f).is_err());
+    }
+
+    #[test]
+    fn test_is_valid_file_name_reserved() {
+        let f = FileNameValidateFlag::default();
+        assert!(is_valid_file_name(&u("CON"), f).is_err());
+        assert!(is_valid_file_name(&u("con"), f).is_err()); // 大小無視
+        assert!(is_valid_file_name(&u("COM1"), f).is_err());
+        assert!(is_valid_file_name(&u("LPT9"), f).is_err());
+        // 予約名に似ているが別物は OK
+        assert!(is_valid_file_name(&u("CONS"), f).is_ok());
+        assert!(is_valid_file_name(&u("COM0"), f).is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_file_name_forbidden_chars() {
+        let f = FileNameValidateFlag::default();
+        assert!(is_valid_file_name(&u("a<b"), f).is_err());
+        assert!(is_valid_file_name(&u("a:b"), f).is_err());
+        assert!(is_valid_file_name(&u("a/b"), f).is_err());
+        assert!(is_valid_file_name(&u("a|b"), f).is_err());
+        // 既定ではワイルドカード・区切りも不可
+        assert!(is_valid_file_name(&u("a*b"), f).is_err());
+        assert!(is_valid_file_name(&u("a\\b"), f).is_err());
+    }
+
+    #[test]
+    fn test_is_valid_file_name_flags() {
+        // ワイルドカード許可
+        let f = FileNameValidateFlag { wildcard: true, allow_delimiter: false };
+        assert!(is_valid_file_name(&u("a*b?c"), f).is_ok());
+        // 区切り許可
+        let f = FileNameValidateFlag { wildcard: false, allow_delimiter: true };
+        assert!(is_valid_file_name(&u("dir\\file"), f).is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_file_name_trailing() {
+        let f = FileNameValidateFlag::default();
+        assert!(is_valid_file_name(&u("file "), f).is_err()); // 末尾空白
+        assert!(is_valid_file_name(&u("file."), f).is_err()); // 末尾ドット
+        // 途中のドットは OK
+        assert!(is_valid_file_name(&u("a.b.c"), f).is_ok());
     }
 }
