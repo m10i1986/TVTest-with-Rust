@@ -1,0 +1,10 @@
+[package]
+name = "tvtest_string_utility"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's StringUtility (platform-independent functions)"
+
+[lib]
+name = "tvtest_string_utility"
+path = "src/lib.rs"

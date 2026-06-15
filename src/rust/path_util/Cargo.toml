@@ -1,0 +1,10 @@
+[package]
+name = "tvtest_path_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's PathUtil (platform-independent path string functions)"
+
+[lib]
+name = "tvtest_path_util"
+path = "src/lib.rs"
