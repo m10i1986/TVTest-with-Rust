@@ -1,0 +1,16 @@
+[package]
+name = "libisdb_caption_parser"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/TS/CaptionParser.cpp: ARIB caption data group / management / caption data parser"
+
+[lib]
+name = "libisdb_caption_parser"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_crc = { path = "../libisdb_crc" }
+libisdb_utilities = { path = "../libisdb_utilities" }
+libisdb_arib_string = { path = "../libisdb_arib_string" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }

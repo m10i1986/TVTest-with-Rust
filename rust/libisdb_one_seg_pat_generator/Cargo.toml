@@ -1,0 +1,16 @@
+[package]
+name = "libisdb_one_seg_pat_generator"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/TS/OneSegPATGenerator.cpp: 1-Seg PAT generation"
+
+[lib]
+name = "libisdb_one_seg_pat_generator"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_crc = { path = "../libisdb_crc" }
+libisdb_utilities = { path = "../libisdb_utilities" }

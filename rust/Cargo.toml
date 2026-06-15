@@ -24,4 +24,6 @@ members = [
     "libisdb_datetime",
     "libisdb_crc", "libisdb_md5", "libisdb_bitrate", "libisdb_bitstream", "libisdb_ts_info", "libisdb_utilities", "libisdb_descriptor", "libisdb_ts_packet", "libisdb_psi_section", "libisdb_pes_packet", "libisdb_adts_parser", "libisdb_mpeg2_video_parser", "libisdb_h26x_parser", "libisdb_pid_map", "libisdb_psi_table", "libisdb_ts_tables", "libisdb_arib_string", "libisdb_event_info", "libisdb_epg_data_file",
     "epgdatatojson",
+    "libisdb_one_seg_pat_generator",
+    "libisdb_caption_parser",
 ]
