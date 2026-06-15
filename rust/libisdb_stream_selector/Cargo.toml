@@ -1,0 +1,18 @@
+[package]
+name = "libisdb_stream_selector"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/TS/StreamSelector.cpp: service/stream-type PID filtering and PAT rewriting"
+
+[lib]
+name = "libisdb_stream_selector"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_crc = { path = "../libisdb_crc" }
+libisdb_utilities = { path = "../libisdb_utilities" }
+
+[dev-dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }

@@ -182,6 +182,21 @@ impl Default for CharSize {
     fn default() -> Self { CharSize::Normal }
 }
 
+// ARIBString.hpp:86 — FormatInfo (字幕の書式情報)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FormatInfo {
+    /// 書式が適用される文字位置(デコード後文字列の UTF-16 単位オフセット)
+    pub pos: usize,
+    /// 文字サイズ
+    pub size: CharSize,
+    /// 文字色インデックス
+    pub char_color_index: u8,
+    /// 背景色インデックス
+    pub back_color_index: u8,
+    /// ラスタ色インデックス
+    pub raster_color_index: u8,
+}
+
 // ARIBString.cpp:416
 fn code_point_to_utf16(cp: u32) -> Vec<u16> {
     if cp < 0x10000 {
@@ -559,6 +574,11 @@ struct DecoderState {
     is_ucs: bool,
     use_char_size: bool,
     unicode_symbol: bool,
+    // 字幕書式(FormatList)用。ARIBString.cpp:141
+    char_color_index: u8,
+    back_color_index: u8,
+    raster_color_index: u8,
+    def_palette: u8,
 }
 
 impl DecoderState {
@@ -590,6 +610,13 @@ impl DecoderState {
             locking_gr = 2;
         }
 
+        // 字幕時の初期色 (ARIBString.cpp:140)
+        let (char_color_index, back_color_index, raster_color_index) = if is_caption {
+            (7, 8, 8)
+        } else {
+            (0, 0, 0)
+        };
+
         DecoderState {
             code_g,
             locking_gl,
@@ -604,8 +631,31 @@ impl DecoderState {
             is_ucs: flags.ucs,
             use_char_size: flags.use_char_size,
             unicode_symbol: flags.unicode_symbol,
+            char_color_index,
+            back_color_index,
+            raster_color_index,
+            def_palette: 0,
         }
     }
+}
+
+// ARIBString.cpp:1186 — SetFormat
+// 現在の書式状態を FormatList に記録する。同位置の既存エントリは上書き。
+fn set_format(format_list: &mut Vec<FormatInfo>, state: &DecoderState, pos: usize) {
+    let format = FormatInfo {
+        pos,
+        size: state.char_size,
+        char_color_index: state.char_color_index,
+        back_color_index: state.back_color_index,
+        raster_color_index: state.raster_color_index,
+    };
+    if let Some(last) = format_list.last_mut() {
+        if last.pos == pos {
+            *last = format;
+            return;
+        }
+    }
+    format_list.push(format);
 }
 
 fn decode_char_to_utf16(code: u16, set: CodeSet, state: &DecoderState, dst: &mut Vec<u16>) {
@@ -755,7 +805,11 @@ fn process_escape_seq(state: &mut DecoderState, code: u8) {
 }
 
 // ARIBString.cpp:182
-fn decode_string(src: &[u8], state: &mut DecoderState) -> Option<Vec<u16>> {
+fn decode_string(
+    src: &[u8],
+    state: &mut DecoderState,
+    mut format_list: Option<&mut Vec<FormatInfo>>,
+) -> Option<Vec<u16>> {
     let mut dst: Vec<u16> = Vec::new();
     let mut pos = 0usize;
 
@@ -871,10 +925,31 @@ fn decode_string(src: &[u8], state: &mut DecoderState) -> Option<Vec<u16>> {
                 }
             }
             0xA0 => dst.push(0x20),
-            0x80..=0x87 => { /* color — ignore */ }
-            0x88 => state.char_size = CharSize::Small,
-            0x89 => state.char_size = CharSize::Medium,
-            0x8A => state.char_size = CharSize::Normal,
+            // 文字色 (CSI 系の前景色 0x80-0x87)。ARIBString.cpp:288
+            0x80..=0x87 => {
+                state.char_color_index = (state.def_palette << 4) | (ctrl & 0x0F);
+                if let Some(fl) = format_list.as_deref_mut() {
+                    set_format(fl, state, dst.len());
+                }
+            }
+            0x88 => {
+                state.char_size = CharSize::Small;
+                if let Some(fl) = format_list.as_deref_mut() {
+                    set_format(fl, state, dst.len());
+                }
+            }
+            0x89 => {
+                state.char_size = CharSize::Medium;
+                if let Some(fl) = format_list.as_deref_mut() {
+                    set_format(fl, state, dst.len());
+                }
+            }
+            0x8A => {
+                state.char_size = CharSize::Normal;
+                if let Some(fl) = format_list.as_deref_mut() {
+                    set_format(fl, state, dst.len());
+                }
+            }
             0x8B => {
                 pos += 1;
                 if pos < src.len() {
@@ -888,16 +963,34 @@ fn decode_string(src: &[u8], state: &mut DecoderState) -> Option<Vec<u16>> {
                         _ => state.char_size,
                     };
                 }
+                if let Some(fl) = format_list.as_deref_mut() {
+                    set_format(fl, state, dst.len());
+                }
             }
             0x0C => dst.push(0x0C),
             0x16 | 0x91 | 0x93 | 0x94 | 0x97 => {
                 pos += 1;
             }
             0x1C => { pos += 2; }
+            // COL 色設定。ARIBString.cpp:335
             0x90 => {
                 pos += 1;
-                if pos < src.len() && src[pos] == 0x20 {
-                    pos += 1; // skip palette byte (def_palette)
+                if pos < src.len() {
+                    if src[pos] == 0x20 {
+                        pos += 1;
+                        if pos < src.len() {
+                            state.def_palette = src[pos] & 0x0F;
+                        }
+                    } else {
+                        match src[pos] & 0xF0 {
+                            0x40 => state.char_color_index = src[pos] & 0x0F,
+                            0x50 => state.back_color_index = src[pos] & 0x0F,
+                            _ => {}
+                        }
+                        if let Some(fl) = format_list.as_deref_mut() {
+                            set_format(fl, state, dst.len());
+                        }
+                    }
                 }
             }
             0x95 => {
@@ -947,13 +1040,37 @@ pub fn decode(src: &[u8], flags: DecodeFlags) -> Option<Vec<u16>> {
         return None;
     }
     let mut state = DecoderState::new(&flags);
-    decode_string(src, &mut state)
+    decode_string(src, &mut state, None)
 }
 
 // Convenience: decode to UTF-8 String
 pub fn decode_to_string(src: &[u8], flags: DecodeFlags) -> Option<String> {
     let utf16 = decode(src, flags)?;
     Some(String::from_utf16_lossy(&utf16).to_string())
+}
+
+/// ARIBString.cpp:113 — DecodeCaption: 字幕デコード(書式情報リスト付き)。
+///
+/// デコード後の UTF-16 文字列と、文字位置ごとの書式情報リスト(FormatInfo)を返す。
+/// 書式情報は色・文字サイズの制御コードが現れた位置で記録される。
+pub fn decode_caption(src: &[u8], flags: DecodeFlags) -> Option<(Vec<u16>, Vec<FormatInfo>)> {
+    if src.is_empty() {
+        return None;
+    }
+    // 字幕デコードでは caption フラグを有効にする (原実装の DecodeCaption 既定)
+    let mut state = DecoderState::new(&flags);
+    let mut format_list: Vec<FormatInfo> = Vec::new();
+    let dst = decode_string(src, &mut state, Some(&mut format_list))?;
+    Some((dst, format_list))
+}
+
+/// 字幕デコードして UTF-8 文字列と書式情報リストを返す。
+pub fn decode_caption_to_string(
+    src: &[u8],
+    flags: DecodeFlags,
+) -> Option<(String, Vec<FormatInfo>)> {
+    let (utf16, format_list) = decode_caption(src, flags)?;
+    Some((String::from_utf16_lossy(&utf16).to_string(), format_list))
 }
 
 #[cfg(test)]
@@ -1090,6 +1207,119 @@ mod tests {
         let src = [0x0Eu8, 0x41];
         let result = decode_to_string(&src, flags_default()).unwrap();
         assert_eq!(result, "Ａ");
+    }
+
+    // ─── DecodeCaption / FormatList ─────────────────────────────
+
+    fn caption_flags() -> DecodeFlags {
+        DecodeFlags { caption: true, ..Default::default() }
+    }
+
+    #[test]
+    fn test_decode_caption_empty_returns_none() {
+        assert!(decode_caption(&[], caption_flags()).is_none());
+    }
+
+    #[test]
+    fn test_decode_caption_no_format_codes() {
+        // 制御コードが無ければ FormatList は空、テキストは通常デコードと一致
+        let src = [0x1Bu8, 0x28, 0x30, 0x22]; // G0=Hiragana 'あ'
+        let (utf16, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(String::from_utf16_lossy(&utf16), "あ");
+        assert!(fmt.is_empty());
+    }
+
+    #[test]
+    fn test_decode_caption_char_color() {
+        // 0x81 = 文字色1 設定。色制御の直後(位置0)に FormatInfo が記録される
+        let src = [0x81u8, 0x1B, 0x28, 0x30, 0x22]; // 色設定 → 'あ'
+        let (utf16, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(String::from_utf16_lossy(&utf16), "あ");
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].pos, 0);
+        assert_eq!(fmt[0].char_color_index, 1);
+        // 字幕初期背景色は 8
+        assert_eq!(fmt[0].back_color_index, 8);
+    }
+
+    #[test]
+    fn test_decode_caption_char_size_small() {
+        // 文字を1つ出してからサイズ変更(SSZ 0x88)を行い、位置1に記録されることを確認
+        // ESC G0=Hiragana, 'あ'(pos 0..1) → 0x88 SSZ(small) at pos 1
+        let src = [0x1Bu8, 0x28, 0x30, 0x22, 0x88];
+        let (utf16, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(String::from_utf16_lossy(&utf16), "あ");
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].pos, 1);
+        assert_eq!(fmt[0].size, CharSize::Small);
+    }
+
+    #[test]
+    fn test_decode_caption_col_background() {
+        // COL(0x90) で背景色設定: 0x50|0x03 = 背景色3
+        let src = [0x90u8, 0x53, 0x1B, 0x28, 0x30, 0x22];
+        let (utf16, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(String::from_utf16_lossy(&utf16), "あ");
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].pos, 0);
+        assert_eq!(fmt[0].back_color_index, 3);
+        // 文字色は字幕初期値 7 のまま
+        assert_eq!(fmt[0].char_color_index, 7);
+    }
+
+    #[test]
+    fn test_decode_caption_col_foreground() {
+        // COL(0x90) で文字色設定: 0x40|0x05 = 文字色5
+        let src = [0x90u8, 0x45, 0x1B, 0x28, 0x30, 0x22];
+        let (_, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].char_color_index, 5);
+    }
+
+    #[test]
+    fn test_decode_caption_col_def_palette() {
+        // COL(0x90) 0x20 でパレット設定 → その後の 0x80-0x87 色に反映
+        // 0x90 0x20 0x01 (palette=1), then 0x82 (color2) → char_color = (1<<4)|2 = 0x12
+        let src = [0x90u8, 0x20, 0x01, 0x82, 0x1B, 0x28, 0x30, 0x22];
+        let (_, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].char_color_index, 0x12);
+    }
+
+    #[test]
+    fn test_decode_caption_same_pos_overwrites() {
+        // 同位置(pos 0)で複数の色設定 → 最後の値で上書き、エントリは1つ
+        let src = [0x81u8, 0x83, 0x1B, 0x28, 0x30, 0x22]; // 色1 → 色3 (どちらもpos 0)
+        let (_, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].char_color_index, 3);
+    }
+
+    #[test]
+    fn test_decode_caption_multiple_positions() {
+        // 'あ'(pos0) → 色変更(pos1) → 'い'(pos1..2) → サイズ変更(pos2)
+        let src = [
+            0x1Bu8, 0x28, 0x30, 0x22, // G0=Hiragana, 'あ'
+            0x84, // 色4 (pos 1)
+            0x24, // 'い' (G0=Hiragana index 4)
+            0x88, // SSZ small (pos 2)
+        ];
+        let (utf16, fmt) = decode_caption(&src, caption_flags()).unwrap();
+        assert_eq!(String::from_utf16_lossy(&utf16), "あい");
+        assert_eq!(fmt.len(), 2);
+        assert_eq!(fmt[0].pos, 1);
+        assert_eq!(fmt[0].char_color_index, 4);
+        assert_eq!(fmt[1].pos, 2);
+        assert_eq!(fmt[1].size, CharSize::Small);
+    }
+
+    #[test]
+    fn test_decode_does_not_emit_format() {
+        // 通常の decode() は FormatList を生成しない(挙動不変の確認)。
+        // 色制御を含んでもテキストは正常にデコードされる。
+        let src = [0x81u8, 0x1B, 0x28, 0x30, 0x22];
+        let result = decode_to_string(&src, caption_flags()).unwrap();
+        assert_eq!(result, "あ");
     }
 
     #[test]

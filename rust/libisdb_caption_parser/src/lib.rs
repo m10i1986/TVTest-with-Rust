@@ -9,7 +9,8 @@
 //
 // 本クレートでは PES パケットの組み立て(libisdb_pes_packet の責務)は呼び出し側に委ね、
 // PES ペイロード(&[u8])を入力として data_group 以降の構造解析を行う。
-// 字幕本文のテキストは libisdb_arib_string::decode でデコードしてコールバックする。
+// 字幕本文のテキストと書式情報(FormatInfo: 色・サイズ)は
+// libisdb_arib_string::decode_caption_to_string でデコードしてコールバックする。
 //
 // 移植対象:
 //   - OnPESPacket               : CaptionParser.cpp:115 (parse_pes_payload として)
@@ -18,15 +19,16 @@
 //   - ParseUnitData             : CaptionParser.cpp:280
 //   - 言語リスト管理            : GetLanguageIndexByTag:94 等
 //
+// FormatList(表示位置・色・サイズ等の書式情報)は libisdb_arib_string::decode_caption_to_string
+// で取得し、on_caption へ渡す。
+//
 // スコープ外(原実装の該当箇所はコメントで明示):
-//   - FormatList(表示位置・色・サイズ等の書式情報出力): ARIBStringDecoder::DecodeCaption
-//     相当が libisdb_arib_string 未実装のため、テキストのみをデコードして通知する。
 //   - DRCS(外字)展開: ParseDRCSUnitData:334。DRCSMap が未移植のため data_unit を
 //     読み飛ばす(構造解析は維持)。
 
 use libisdb_crc::crc16_ccitt;
 use libisdb_utilities::{load16_be, load24_be};
-use libisdb_arib_string::{decode_to_string, DecodeFlags};
+use libisdb_arib_string::{decode_caption_to_string, DecodeFlags, FormatInfo};
 use libisdb_ts_info::{LANGUAGE_CODE_POR, LANGUAGE_CODE_SPA};
 
 /// 言語情報。CaptionParser.hpp:44 LanguageInfo。
@@ -41,13 +43,28 @@ pub struct LanguageInfo {
     pub rollup_mode: u8,
 }
 
+/// DRCS(外字)ビットマップ。CaptionParser.hpp:74 DRCSBitmap。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrcsBitmap {
+    pub width: u8,
+    pub height: u8,
+    pub depth: u8,
+    pub bits_per_pixel: u8,
+    /// ビットマップデータ(width*height*bits_per_pixel ビットをパックしたもの)
+    pub data: Vec<u8>,
+}
+
 /// 字幕イベントハンドラ。CaptionParser.hpp:63 CaptionHandler。
 pub trait CaptionHandler {
     /// 言語情報リストが更新された。OnLanguageUpdate:68。
     fn on_language_update(&mut self, _languages: &[LanguageInfo]) {}
     /// 字幕本文が得られた。OnCaption:69。
     /// `language` はデータグループインデックス(字幕データの場合 DataGroupID & 0x1F)。
-    fn on_caption(&mut self, _language: u8, _text: &str) {}
+    /// `format_list` は文字位置ごとの書式情報(色・サイズ)。
+    fn on_caption(&mut self, _language: u8, _text: &str, _format_list: &[FormatInfo]) {}
+    /// DRCS(外字)が得られた。CaptionParser.cpp:414 SetDRCS。
+    /// `character_code` は DRCS の文字コード。
+    fn on_drcs(&mut self, _character_code: u16, _bitmap: &DrcsBitmap) {}
 }
 
 /// 字幕解析器。CaptionParser クラス本体。
@@ -308,8 +325,9 @@ impl CaptionParser {
 
         let data_unit_parameter = data[1];
 
-        // DRCS(0x30/0x31): DRCSMap 未移植のため構造のみ読み飛ばす (ParseDRCSUnitData:334)
+        // DRCS(0x30/0x31): ビットマップを抽出して通知 (ParseDRCSUnitData:334)
         if data_unit_parameter == 0x30 || data_unit_parameter == 0x31 {
+            parse_drcs_unit_data(&data[5..5 + unit_size], handler);
             *data_size = 5 + unit_size;
             return true;
         }
@@ -349,9 +367,11 @@ impl CaptionParser {
                         flags.latin = true;
                     }
                 }
-                if let Some(text) = decode_to_string(&data[5..5 + unit_size], flags) {
+                if let Some((text, format_list)) =
+                    decode_caption_to_string(&data[5..5 + unit_size], flags)
+                {
                     if !text.is_empty() {
-                        handler.on_caption(data_group_index, &text);
+                        handler.on_caption(data_group_index, &text, &format_list);
                     }
                 }
             }
@@ -362,23 +382,131 @@ impl CaptionParser {
     }
 }
 
+/// DRCS の Depth から BitsPerPixel を求める。CaptionParser.cpp:381。
+fn drcs_depth_to_bpp(mode: u8, depth: u8) -> u8 {
+    if mode == 0x00 {
+        1
+    } else if depth == 0 {
+        1
+    } else if depth <= 2 {
+        2
+    } else if depth <= 6 {
+        3
+    } else if depth <= 14 {
+        4
+    } else if depth <= 30 {
+        5
+    } else if depth <= 62 {
+        6
+    } else if depth <= 126 {
+        7
+    } else if depth <= 254 {
+        8
+    } else {
+        9
+    }
+}
+
+/// data_unit() の DRCS 部分を解析する。ParseDRCSUnitData (CaptionParser.cpp:334)。
+///
+/// 各文字コードについて、最初のフォント(j==0)のビットマップを on_drcs で通知する。
+/// ジオメトリック(Mode > 0x01)は非対応で読み飛ばす。
+fn parse_drcs_unit_data<H: CaptionHandler>(data: &[u8], handler: &mut H) -> bool {
+    let mut pos = 0usize;
+    if data.is_empty() {
+        return false;
+    }
+
+    let number_of_code = data[pos] as usize;
+    pos += 1;
+
+    for _ in 0..number_of_code {
+        if pos + 3 > data.len() {
+            return false;
+        }
+        let character_code = load16_be(&data[pos..]);
+        let number_of_font = data[pos + 2] as usize;
+        pos += 3;
+
+        for j in 0..number_of_font {
+            if pos + 1 > data.len() {
+                return false;
+            }
+            let mode = data[pos] & 0x0F;
+            pos += 1;
+
+            if mode <= 0x01 {
+                if pos + 3 > data.len() {
+                    return false;
+                }
+                let depth = data[pos];
+                let width = data[pos + 1];
+                let height = data[pos + 2];
+                if width == 0 || height == 0 {
+                    return false;
+                }
+                pos += 3;
+
+                let bits_per_pixel = drcs_depth_to_bpp(mode, depth);
+                let bitmap_data_size =
+                    ((width as usize * height as usize * bits_per_pixel as usize) + 7) >> 3;
+                if pos + bitmap_data_size > data.len() {
+                    return false;
+                }
+
+                if j == 0 {
+                    let bitmap = DrcsBitmap {
+                        width,
+                        height,
+                        depth,
+                        bits_per_pixel,
+                        data: data[pos..pos + bitmap_data_size].to_vec(),
+                    };
+                    handler.on_drcs(character_code, &bitmap);
+                }
+
+                pos += bitmap_data_size;
+            } else {
+                // ジオメトリック(非対応): RegionX/Y(2) + GeometricDataLength(2) + data
+                if pos + 4 > data.len() {
+                    return false;
+                }
+                let geometric_data_length = load16_be(&data[pos + 2..]) as usize;
+                pos += 4;
+                if pos + geometric_data_length > data.len() {
+                    return false;
+                }
+                pos += geometric_data_length;
+            }
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// テスト用ハンドラ: 言語更新と字幕本文を記録する。
+    /// テスト用ハンドラ: 言語更新と字幕本文(+書式)・DRCS を記録する。
     #[derive(Default)]
     struct RecordHandler {
         languages: Vec<Vec<LanguageInfo>>,
         captions: Vec<(u8, String)>,
+        formats: Vec<Vec<FormatInfo>>,
+        drcs: Vec<(u16, DrcsBitmap)>,
     }
 
     impl CaptionHandler for RecordHandler {
         fn on_language_update(&mut self, languages: &[LanguageInfo]) {
             self.languages.push(languages.to_vec());
         }
-        fn on_caption(&mut self, language: u8, text: &str) {
+        fn on_caption(&mut self, language: u8, text: &str, format_list: &[FormatInfo]) {
             self.captions.push((language, text.to_string()));
+            self.formats.push(format_list.to_vec());
+        }
+        fn on_drcs(&mut self, character_code: u16, bitmap: &DrcsBitmap) {
+            self.drcs.push((character_code, bitmap.clone()));
         }
     }
 
@@ -590,11 +718,49 @@ mod tests {
     }
 
     #[test]
-    fn test_caption_data_skips_drcs_unit() {
+    fn test_caption_data_with_format_info() {
+        let mut p = CaptionParser::new(false);
+        let mut h = RecordHandler::default();
+        let lang = LanguageInfo {
+            language_tag: 0,
+            dmf: 0,
+            dc: 0,
+            language_code: 0x6A706E,
+            format: 7,
+            tcs: 0,
+            rollup_mode: 0,
+        };
+        let mp = build_pes_payload(0x00, 0, &build_management_body(&lang));
+        assert!(p.parse_pes_payload(&mp, &mut h));
+
+        // 字幕本文: 色設定(0x81) + スペース。書式情報が通知される
+        let caption_text: &[u8] = &[0x81, 0x20];
+        let mut du = Vec::new();
+        du.push(0x1F);
+        du.push(0x20); // 本文
+        du.extend_from_slice(&(caption_text.len() as u32).to_be_bytes()[1..4]);
+        du.extend_from_slice(caption_text);
+
+        let mut unit_body = Vec::new();
+        unit_body.push(0x00);
+        unit_body.extend_from_slice(&(du.len() as u32).to_be_bytes()[1..4]);
+        unit_body.extend_from_slice(&du);
+
+        let cp = build_pes_payload(0x01, 0, &unit_body);
+        assert!(p.parse_pes_payload(&cp, &mut h));
+        assert!(!h.captions.is_empty());
+        // 書式情報リストに色設定が記録されている
+        assert!(!h.formats[0].is_empty());
+        assert_eq!(h.formats[0][0].char_color_index, 1);
+    }
+
+    #[test]
+    fn test_caption_data_malformed_drcs_unit_safe() {
         let mut p = CaptionParser::new(true); // 1Seg
         let mut h = RecordHandler::default();
 
-        // DRCS data_unit(0x30) — 読み飛ばされる
+        // 不正な DRCS data_unit(0x30): number_of_code=0xAA だが本体は足りない
+        // → parse_drcs_unit_data は途中で停止し、字幕本文の通知は無い(クラッシュしない)
         let drcs_payload: &[u8] = &[0xAA, 0xBB];
         let mut du = Vec::new();
         du.push(0x1F);
@@ -609,8 +775,101 @@ mod tests {
 
         let cp = build_pes_payload(0x01, 0, &unit_body);
         assert!(p.parse_pes_payload(&cp, &mut h));
-        // DRCS は読み飛ばされ字幕本文の通知は無い
         assert!(h.captions.is_empty());
+        assert!(h.drcs.is_empty());
+    }
+
+    #[test]
+    fn test_caption_data_drcs_bitmap_extracted() {
+        let mut p = CaptionParser::new(true); // 1Seg
+        let mut h = RecordHandler::default();
+
+        // 正常な DRCS data_unit(0x30):
+        //   NumberOfCode=1
+        //   CharacterCode=0xEC00, NumberOfFont=1
+        //   Mode=0x00(1bpp), Depth=0, Width=8, Height=8
+        //   BitmapDataSize = (8*8*1 + 7) >> 3 = 8 バイト
+        let mut drcs = Vec::new();
+        drcs.push(0x01); // NumberOfCode
+        drcs.extend_from_slice(&0xEC00u16.to_be_bytes()); // CharacterCode
+        drcs.push(0x01); // NumberOfFont
+        drcs.push(0x00); // FontID(高位) + Mode=0x00
+        drcs.push(0x00); // Depth
+        drcs.push(0x08); // Width
+        drcs.push(0x08); // Height
+        let bitmap_bytes: [u8; 8] = [0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81];
+        drcs.extend_from_slice(&bitmap_bytes); // 8 バイトのビットマップ
+
+        let mut du = Vec::new();
+        du.push(0x1F);
+        du.push(0x30); // DRCS
+        du.extend_from_slice(&(drcs.len() as u32).to_be_bytes()[1..4]);
+        du.extend_from_slice(&drcs);
+
+        let mut unit_body = Vec::new();
+        unit_body.push(0x00); // TMD
+        unit_body.extend_from_slice(&(du.len() as u32).to_be_bytes()[1..4]);
+        unit_body.extend_from_slice(&du);
+
+        let cp = build_pes_payload(0x01, 0, &unit_body);
+        assert!(p.parse_pes_payload(&cp, &mut h));
+
+        assert_eq!(h.drcs.len(), 1);
+        let (code, bm) = &h.drcs[0];
+        assert_eq!(*code, 0xEC00);
+        assert_eq!(bm.width, 8);
+        assert_eq!(bm.height, 8);
+        assert_eq!(bm.bits_per_pixel, 1);
+        assert_eq!(bm.data, bitmap_bytes.to_vec());
+    }
+
+    #[test]
+    fn test_drcs_depth_to_bpp() {
+        // Mode=0 は常に 1bpp
+        assert_eq!(drcs_depth_to_bpp(0x00, 255), 1);
+        // Mode=1: Depth に応じた bpp
+        assert_eq!(drcs_depth_to_bpp(0x01, 0), 1);
+        assert_eq!(drcs_depth_to_bpp(0x01, 2), 2);
+        assert_eq!(drcs_depth_to_bpp(0x01, 6), 3);
+        assert_eq!(drcs_depth_to_bpp(0x01, 14), 4);
+        assert_eq!(drcs_depth_to_bpp(0x01, 30), 5);
+        assert_eq!(drcs_depth_to_bpp(0x01, 62), 6);
+        assert_eq!(drcs_depth_to_bpp(0x01, 126), 7);
+        assert_eq!(drcs_depth_to_bpp(0x01, 254), 8);
+        assert_eq!(drcs_depth_to_bpp(0x01, 255), 9);
+    }
+
+    #[test]
+    fn test_drcs_geometric_skipped() {
+        // ジオメトリック(Mode=0x02)は読み飛ばされ、on_drcs は呼ばれない
+        let mut p = CaptionParser::new(true);
+        let mut h = RecordHandler::default();
+
+        let geo: [u8; 3] = [0xAA, 0xBB, 0xCC];
+        let mut drcs = Vec::new();
+        drcs.push(0x01); // NumberOfCode
+        drcs.extend_from_slice(&0xEC01u16.to_be_bytes());
+        drcs.push(0x01); // NumberOfFont
+        drcs.push(0x02); // Mode=0x02 (geometric)
+        drcs.push(0x00); // RegionX
+        drcs.push(0x00); // RegionY
+        drcs.extend_from_slice(&(geo.len() as u16).to_be_bytes()); // GeometricDataLength
+        drcs.extend_from_slice(&geo);
+
+        let mut du = Vec::new();
+        du.push(0x1F);
+        du.push(0x31); // DRCS (0x31 も DRCS)
+        du.extend_from_slice(&(drcs.len() as u32).to_be_bytes()[1..4]);
+        du.extend_from_slice(&drcs);
+
+        let mut unit_body = Vec::new();
+        unit_body.push(0x00);
+        unit_body.extend_from_slice(&(du.len() as u32).to_be_bytes()[1..4]);
+        unit_body.extend_from_slice(&du);
+
+        let cp = build_pes_payload(0x01, 0, &unit_body);
+        assert!(p.parse_pes_payload(&cp, &mut h));
+        assert!(h.drcs.is_empty());
     }
 
     #[test]
