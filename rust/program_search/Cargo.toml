@@ -1,0 +1,15 @@
+[package]
+name = "tvtest_program_search"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's ProgramSearch pure logic: EventSearchServiceList, EventSearchSettings, EventSearchSettingsList"
+
+[lib]
+name = "tvtest_program_search"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_string_utility = { path = "../string_utility" }
+tvtest_util = { path = "../util" }
+bitflags = "2"

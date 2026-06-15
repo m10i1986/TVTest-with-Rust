@@ -1,0 +1,18 @@
+[package]
+name = "libisdb_psi_table"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB PSITable.cpp: PSI table management"
+
+[lib]
+name = "libisdb_psi_table"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_psi_section = { path = "../libisdb_psi_section" }
+libisdb_pid_map = { path = "../libisdb_pid_map" }
+
+[dev-dependencies]
+libisdb_crc = { path = "../libisdb_crc" }

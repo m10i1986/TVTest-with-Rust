@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_adts_parser"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB ADTSParser.cpp: ADTS frame parsing from ES/PES"
+
+[lib]
+name = "libisdb_adts_parser"
+path = "src/lib.rs"
+
+[dependencies]

@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_utilities"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Utilities.hpp/cpp: BCD, byte-swap, big-endian load/store helpers"
+
+[lib]
+name = "libisdb_utilities"
+path = "src/lib.rs"
+
+[dependencies]

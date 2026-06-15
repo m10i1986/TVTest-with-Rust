@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_pes_packet"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB PESPacket.cpp: PES packet parsing and assembly from TS"
+
+[lib]
+name = "libisdb_pes_packet"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }

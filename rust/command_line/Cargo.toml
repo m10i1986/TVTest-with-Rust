@@ -1,0 +1,13 @@
+[package]
+name = "tvtest_command_line"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CommandLine pure logic (duration parse, ini-entry parse, datetime parse)"
+
+[lib]
+name = "tvtest_command_line"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_util = { path = "../util" }

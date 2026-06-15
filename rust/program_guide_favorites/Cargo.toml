@@ -1,0 +1,12 @@
+[package]
+name = "tvtest_program_guide_favorites"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CProgramGuideFavorites pure logic"
+
+[lib]
+name = "tvtest_program_guide_favorites"
+path = "src/lib.rs"
+
+[dependencies]

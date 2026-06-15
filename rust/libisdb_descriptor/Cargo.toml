@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_descriptor"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB DescriptorBase.cpp + DescriptorBlock.cpp: TLV descriptor parsing"
+
+[lib]
+name = "libisdb_descriptor"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_datetime = { path = "../libisdb_datetime" }

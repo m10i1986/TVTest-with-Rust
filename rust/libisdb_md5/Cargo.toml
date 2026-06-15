@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_md5"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB MD5.cpp: MD5 hash calculation"
+
+[lib]
+name = "libisdb_md5"
+path = "src/lib.rs"
+
+[dependencies]

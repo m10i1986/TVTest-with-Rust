@@ -1,0 +1,14 @@
+[package]
+name = "libisdb_psi_section"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB PSISection.cpp: PSI section parsing with CRC32 validation"
+
+[lib]
+name = "libisdb_psi_section"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_crc = { path = "../libisdb_crc" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }

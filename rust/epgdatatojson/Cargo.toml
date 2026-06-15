@@ -1,0 +1,17 @@
+[package]
+name = "epgdatatojson"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Samples/epgdatatojson.cpp: EPG binary file to JSON converter"
+
+[[bin]]
+name = "epgdatatojson"
+path = "src/main.rs"
+
+[dev-dependencies]
+
+[dependencies]
+libisdb_epg_data_file = { path = "../libisdb_epg_data_file" }
+libisdb_event_info = { path = "../libisdb_event_info" }
+libisdb_datetime = { path = "../libisdb_datetime" }

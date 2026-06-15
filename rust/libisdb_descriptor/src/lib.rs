@@ -1,0 +1,1063 @@
+// LibISDB の DescriptorBase.cpp + DescriptorBlock.cpp + Descriptors.cpp を Rust へ移植したもの。
+//
+// 移植対象:
+//   - DescriptorBase        : DescriptorBase.cpp:36
+//   - DescriptorBlock       : DescriptorBlock.cpp:75
+//   - CADescriptor          : Descriptors.cpp:38
+//   - NetworkNameDescriptor : Descriptors.cpp:72
+//   - ServiceListDescriptor : Descriptors.cpp:113
+//   - ServiceDescriptor     : Descriptors.cpp:163
+//   - ShortEventDescriptor  : Descriptors.cpp:387
+//   - ExtendedEventDescriptor:Descriptors.cpp:434
+//   - ComponentDescriptor   : Descriptors.cpp:523
+//   - StreamIDDescriptor    : Descriptors.cpp:567
+//   - ContentDescriptor     : Descriptors.cpp:592
+//   - AudioComponentDescriptor:Descriptors.cpp:800
+//   - SeriesDescriptor      : Descriptors.cpp:1650
+//   - EventGroupDescriptor  : Descriptors.cpp:1722
+//   - LogoTransmissionDescriptor:Descriptors.cpp:1607
+//   - TerrestrialDeliverySystemDescriptor:Descriptors.cpp:2187
+//   - PartialReceptionDescriptor:Descriptors.cpp:2245
+//   - SystemManagementDescriptor:Descriptors.cpp:2360
+//
+// ARIBString は Vec<u8>(生バイト列)として保持する。
+
+use libisdb_datetime::{mjd_to_datetime, DateTime};
+
+pub const PID_INVALID: u16 = 0x1FFF;
+pub const LANGUAGE_CODE_INVALID: u32 = 0;
+pub const COMPONENT_TAG_INVALID: u8 = 0xFF;
+pub const STREAM_CONTENT_INVALID: u8 = 0xFF;
+pub const COMPONENT_TYPE_INVALID: u8 = 0xFF;
+pub const STREAM_TYPE_INVALID: u8 = 0xFF;
+
+fn load16(data: &[u8]) -> u16 {
+    ((data[0] as u16) << 8) | (data[1] as u16)
+}
+fn load24(data: &[u8]) -> u32 {
+    ((data[0] as u32) << 16) | ((data[1] as u32) << 8) | (data[2] as u32)
+}
+#[allow(dead_code)]
+fn load32(data: &[u8]) -> u32 {
+    ((data[0] as u32) << 24) | ((data[1] as u32) << 16) | ((data[2] as u32) << 8) | (data[3] as u32)
+}
+
+// ─── DescriptorBase ────────────────────────────────────────────
+
+/// 記述子の基底。DescriptorBase.hpp:34。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DescriptorBase {
+    pub tag: u8,
+    pub length: u8,
+    pub payload: Vec<u8>,
+    pub is_valid: bool,
+}
+
+impl DescriptorBase {
+    pub fn new() -> Self { Self::default() }
+
+    /// DescriptorBase.cpp:53
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 2 { return None; }
+        let tag    = data[0];
+        let length = data[1];
+        let needed = length as usize + 2;
+        if data.len() < needed { return None; }
+        let payload  = data[2..needed].to_vec();
+        let is_valid = length > 0;
+        Some(Self { tag, length, payload, is_valid })
+    }
+
+    pub fn total_size(&self) -> usize { self.length as usize + 2 }
+    pub fn get_tag(&self) -> u8 { self.tag }
+    pub fn get_length(&self) -> u8 { self.length }
+    pub fn get_payload(&self) -> &[u8] { &self.payload }
+    pub fn is_valid(&self) -> bool { self.is_valid }
+
+    pub fn reset(&mut self) {
+        self.tag = 0; self.length = 0; self.payload.clear(); self.is_valid = false;
+    }
+}
+
+// ─── DescriptorBlock ───────────────────────────────────────────
+
+/// 記述子ブロック。DescriptorBlock.hpp:38。
+#[derive(Clone, Debug, Default)]
+pub struct DescriptorBlock {
+    descriptors: Vec<DescriptorBase>,
+}
+
+impl DescriptorBlock {
+    pub fn new() -> Self { Self::default() }
+
+    /// DescriptorBlock.cpp:75
+    pub fn parse_block(&mut self, data: &[u8]) -> usize {
+        self.descriptors.clear();
+        if data.len() < 2 { return 0; }
+        let mut pos = 0;
+        while pos + 2 <= data.len() {
+            if let Some(desc) = DescriptorBase::parse(&data[pos..]) {
+                pos += desc.total_size();
+                self.descriptors.push(desc);
+            } else {
+                break;
+            }
+        }
+        self.descriptors.len()
+    }
+
+    pub fn get_descriptor_by_tag(&self, tag: u8) -> Option<&DescriptorBase> {
+        self.descriptors.iter().find(|d| d.tag == tag)
+    }
+    pub fn get_descriptor_by_index(&self, index: usize) -> Option<&DescriptorBase> {
+        self.descriptors.get(index)
+    }
+    pub fn get_descriptor_count(&self) -> usize { self.descriptors.len() }
+    pub fn reset(&mut self) { self.descriptors.clear(); }
+    pub fn iter(&self) -> impl Iterator<Item = &DescriptorBase> { self.descriptors.iter() }
+}
+
+// ─── CADescriptor (tag=0x09) ───────────────────────────────────
+
+/// 限定受信方式記述子。Descriptors.cpp:38。
+#[derive(Clone, Debug, Default)]
+pub struct CaDescriptor {
+    pub ca_system_id: u16,
+    pub ca_pid: u16,
+    pub private_data: Vec<u8>,
+}
+
+impl CaDescriptor {
+    pub const TAG: u8 = 0x09;
+
+    /// Descriptors.cpp:56
+    pub fn parse(payload: &[u8], length: u8) -> Option<Self> {
+        let len = length as usize;
+        if len < 4 { return None; }
+        if payload.len() < len { return None; }
+        if (payload[2] & 0xE0) != 0xE0 { return None; }
+        let ca_system_id = load16(&payload[0..2]);
+        let ca_pid       = load16(&payload[2..4]) & 0x1FFF;
+        let private_data = payload[4..len].to_vec();
+        Some(Self { ca_system_id, ca_pid, private_data })
+    }
+
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        Self::parse(&desc.payload, desc.length)
+    }
+}
+
+// ─── NetworkNameDescriptor (tag=0x40) ──────────────────────────
+
+/// ネットワーク名記述子。Descriptors.cpp:72。
+#[derive(Clone, Debug, Default)]
+pub struct NetworkNameDescriptor {
+    pub network_name: Vec<u8>,
+}
+
+impl NetworkNameDescriptor {
+    pub const TAG: u8 = 0x40;
+
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        Some(Self { network_name: desc.payload.clone() })
+    }
+}
+
+// ─── ServiceListDescriptor (tag=0x41) ──────────────────────────
+
+/// サービス情報。Descriptors.hpp:ServiceListDescriptor::ServiceInfo。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ServiceInfo {
+    pub service_id: u16,
+    pub service_type: u8,
+}
+
+/// サービスリスト記述子。Descriptors.cpp:113。
+#[derive(Clone, Debug, Default)]
+pub struct ServiceListDescriptor {
+    pub service_list: Vec<ServiceInfo>,
+}
+
+impl ServiceListDescriptor {
+    pub const TAG: u8 = 0x41;
+
+    /// Descriptors.cpp:148
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p = &desc.payload;
+        let len = desc.length as usize;
+        if len % 3 != 0 { return None; }
+        let mut list = Vec::with_capacity(len / 3);
+        let mut pos = 0;
+        while pos + 3 <= len {
+            list.push(ServiceInfo {
+                service_id:   load16(&p[pos..pos+2]),
+                service_type: p[pos+2],
+            });
+            pos += 3;
+        }
+        Some(Self { service_list: list })
+    }
+}
+
+// ─── ServiceDescriptor (tag=0x48) ──────────────────────────────
+
+/// サービス記述子。Descriptors.cpp:163。
+#[derive(Clone, Debug, Default)]
+pub struct ServiceDescriptor {
+    pub service_type: u8,
+    pub provider_name: Vec<u8>,
+    pub service_name: Vec<u8>,
+}
+
+impl ServiceDescriptor {
+    pub const TAG: u8 = 0x48;
+
+    /// Descriptors.cpp:201
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 3 { return None; }
+        let service_type  = p[0];
+        let prov_len      = p[1] as usize;
+        if 2 + prov_len + 1 > len { return None; }
+        let provider_name = p[2..2+prov_len].to_vec();
+        let svc_len       = p[2+prov_len] as usize;
+        if 3 + prov_len + svc_len > len { return None; }
+        let service_name  = p[3+prov_len..3+prov_len+svc_len].to_vec();
+        Some(Self { service_type, provider_name, service_name })
+    }
+}
+
+// ─── ShortEventDescriptor (tag=0x4D) ───────────────────────────
+
+/// 短形式イベント記述子。Descriptors.cpp:387。
+#[derive(Clone, Debug, Default)]
+pub struct ShortEventDescriptor {
+    pub language_code: u32,
+    pub event_name: Vec<u8>,
+    pub event_description: Vec<u8>,
+}
+
+impl ShortEventDescriptor {
+    pub const TAG: u8 = 0x4D;
+
+    /// Descriptors.cpp:404
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 5 { return None; }
+        let language_code = load24(&p[0..3]);
+        let mut pos = 3usize;
+        let name_len = p[pos] as usize; pos += 1;
+        let event_name = if name_len > 0 {
+            if pos + name_len >= len { return None; }
+            let v = p[pos..pos+name_len].to_vec(); pos += name_len; v
+        } else { vec![] };
+        let desc_len = p[pos] as usize; pos += 1;
+        let event_description = if desc_len > 0 {
+            if pos + desc_len > len { return None; }
+            p[pos..pos+desc_len].to_vec()
+        } else { vec![] };
+        Some(Self { language_code, event_name, event_description })
+    }
+}
+
+// ─── ExtendedEventDescriptor (tag=0x4E) ────────────────────────
+
+/// 拡張形式イベント記述子のアイテム。
+#[derive(Clone, Debug, Default)]
+pub struct ExtendedEventItem {
+    pub description: Vec<u8>,
+    pub item_char: Vec<u8>,
+}
+
+/// 拡張形式イベント記述子。Descriptors.cpp:434。
+#[derive(Clone, Debug, Default)]
+pub struct ExtendedEventDescriptor {
+    pub descriptor_number: u8,
+    pub last_descriptor_number: u8,
+    pub language_code: u32,
+    pub item_list: Vec<ExtendedEventItem>,
+    pub text: Vec<u8>,
+}
+
+impl ExtendedEventDescriptor {
+    pub const TAG: u8 = 0x4E;
+
+    /// Descriptors.cpp:474
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 5 { return None; }
+        let descriptor_number      = p[0] >> 4;
+        let last_descriptor_number = p[0] & 0x0F;
+        let language_code          = load24(&p[1..4]);
+        let item_len               = p[4] as usize;
+        let end_pos                = 5 + item_len;
+        if end_pos > len { return None; }
+        let mut pos = 5usize;
+        let mut item_list = Vec::new();
+        while pos < end_pos {
+            let desc_len = p[pos] as usize; pos += 1;
+            if pos + desc_len > end_pos { break; }
+            let description = p[pos..pos+desc_len].to_vec(); pos += desc_len;
+            let char_len = p[pos] as usize; pos += 1;
+            if pos + char_len > end_pos { break; }
+            let item_char_len = char_len.min(220);
+            let item_char = p[pos..pos+item_char_len].to_vec(); pos += char_len;
+            item_list.push(ExtendedEventItem { description, item_char });
+        }
+        let text = if end_pos + 1 < len {
+            let txt_len = p[end_pos] as usize;
+            if end_pos + 1 + txt_len <= len {
+                p[end_pos+1..end_pos+1+txt_len].to_vec()
+            } else { vec![] }
+        } else { vec![] };
+        Some(Self { descriptor_number, last_descriptor_number, language_code, item_list, text })
+    }
+}
+
+// ─── ComponentDescriptor (tag=0x50) ────────────────────────────
+
+/// コンポーネント記述子。Descriptors.cpp:523。
+#[derive(Clone, Debug, Default)]
+pub struct ComponentDescriptor {
+    pub stream_content: u8,
+    pub component_type: u8,
+    pub component_tag: u8,
+    pub language_code: u32,
+    pub text: Vec<u8>,
+}
+
+impl ComponentDescriptor {
+    pub const TAG: u8 = 0x50;
+
+    /// Descriptors.cpp:549
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 6 { return None; }
+        let stream_content = p[0] & 0x0F;
+        if stream_content != 0x01 { return None; }
+        let component_type = p[1];
+        let component_tag  = p[2];
+        let language_code  = load24(&p[3..6]);
+        let text = if len > 6 { p[6..len.min(6+16)].to_vec() } else { vec![] };
+        Some(Self { stream_content, component_type, component_tag, language_code, text })
+    }
+}
+
+// ─── StreamIDDescriptor (tag=0x52) ─────────────────────────────
+
+/// ストリーム識別記述子。Descriptors.cpp:567。
+#[derive(Clone, Debug, Default)]
+pub struct StreamIdDescriptor {
+    pub component_tag: u8,
+}
+
+impl StreamIdDescriptor {
+    pub const TAG: u8 = 0x52;
+
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 1 { return None; }
+        Some(Self { component_tag: desc.payload[0] })
+    }
+}
+
+// ─── ContentDescriptor (tag=0x54) ──────────────────────────────
+
+/// コンテンツニブル情報。Descriptors.hpp:ContentDescriptor::NibbleInfo。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContentNibbleInfo {
+    pub content_nibble_level1: u8,
+    pub content_nibble_level2: u8,
+    pub user_nibble1: u8,
+    pub user_nibble2: u8,
+}
+
+/// コンテンツ記述子。Descriptors.cpp:592。
+#[derive(Clone, Debug, Default)]
+pub struct ContentDescriptor {
+    pub nibble_list: Vec<ContentNibbleInfo>,
+}
+
+impl ContentDescriptor {
+    pub const TAG: u8 = 0x54;
+
+    /// Descriptors.cpp:619
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len > 14 { return None; }
+        let p = &desc.payload;
+        let count = len / 2;
+        let mut nibble_list = Vec::with_capacity(count);
+        for i in 0..count {
+            nibble_list.push(ContentNibbleInfo {
+                content_nibble_level1: p[i*2]   >> 4,
+                content_nibble_level2: p[i*2]   & 0x0F,
+                user_nibble1:          p[i*2+1] >> 4,
+                user_nibble2:          p[i*2+1] & 0x0F,
+            });
+        }
+        Some(Self { nibble_list })
+    }
+}
+
+// ─── AudioComponentDescriptor (tag=0xC4) ───────────────────────
+
+/// 音声コンポーネント記述子。Descriptors.cpp:800。
+#[derive(Clone, Debug, Default)]
+pub struct AudioComponentDescriptor {
+    pub stream_content: u8,
+    pub component_type: u8,
+    pub component_tag: u8,
+    pub stream_type: u8,
+    pub simulcast_group_tag: u8,
+    pub es_multi_lingual_flag: bool,
+    pub main_component_flag: bool,
+    pub quality_indicator: u8,
+    pub sampling_rate: u8,
+    pub language_code: u32,
+    pub language_code2: u32,
+    pub text: Vec<u8>,
+}
+
+impl AudioComponentDescriptor {
+    pub const TAG: u8 = 0xC4;
+
+    /// Descriptors.cpp:857
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 9 { return None; }
+        let stream_content      = p[0] & 0x0F;
+        if stream_content != 0x02 { return None; }
+        let component_type      = p[1];
+        let component_tag       = p[2];
+        let stream_type         = p[3];
+        let simulcast_group_tag = p[4];
+        let es_multi_lingual_flag = (p[5] & 0x80) != 0;
+        let main_component_flag   = (p[5] & 0x40) != 0;
+        let quality_indicator     = (p[5] & 0x30) >> 4;
+        let sampling_rate         = (p[5] & 0x0E) >> 1;
+        let language_code         = load24(&p[6..9]);
+        let mut pos = 9usize;
+        let language_code2 = if es_multi_lingual_flag {
+            if pos + 3 > len { return None; }
+            let lc2 = load24(&p[pos..pos+3]); pos += 3; lc2
+        } else { LANGUAGE_CODE_INVALID };
+        let text = if pos < len {
+            p[pos..len.min(pos+33)].to_vec()
+        } else { vec![] };
+        Some(Self {
+            stream_content, component_type, component_tag, stream_type, simulcast_group_tag,
+            es_multi_lingual_flag, main_component_flag, quality_indicator, sampling_rate,
+            language_code, language_code2, text,
+        })
+    }
+}
+
+// ─── LogoTransmissionDescriptor (tag=0xCF) ─────────────────────
+
+pub const LOGO_TRANSMISSION_CDT1: u8 = 0x01;
+pub const LOGO_TRANSMISSION_CDT2: u8 = 0x02;
+pub const LOGO_TRANSMISSION_CHAR: u8 = 0x03;
+
+/// ロゴ伝送記述子。Descriptors.cpp:1607。
+#[derive(Clone, Debug, Default)]
+pub struct LogoTransmissionDescriptor {
+    pub logo_transmission_type: u8,
+    pub logo_id: u16,
+    pub logo_version: u16,
+    pub download_data_id: u16,
+    pub logo_char: Vec<u8>,
+}
+
+impl LogoTransmissionDescriptor {
+    pub const TAG: u8 = 0xCF;
+
+    /// Descriptors.cpp:1570
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let t = p[0];
+        let mut logo_id = 0xFFFF;
+        let mut logo_version = 0xFFFF;
+        let mut download_data_id = 0xFFFF;
+        let mut logo_char = vec![];
+        match t {
+            LOGO_TRANSMISSION_CDT1 => {
+                if len < 7 { return None; }
+                logo_id          = load16(&p[1..3]) & 0x01FF;
+                logo_version     = load16(&p[3..5]) & 0x0FFF;
+                download_data_id = load16(&p[5..7]);
+            }
+            LOGO_TRANSMISSION_CDT2 => {
+                if len < 3 { return None; }
+                logo_id = load16(&p[1..3]) & 0x01FF;
+            }
+            LOGO_TRANSMISSION_CHAR => {
+                if len >= 2 {
+                    logo_char = p[1..len].to_vec();
+                }
+            }
+            _ => {}
+        }
+        Some(Self { logo_transmission_type: t, logo_id, logo_version, download_data_id, logo_char })
+    }
+}
+
+// ─── SeriesDescriptor (tag=0xD5) ───────────────────────────────
+
+pub const SERIES_ID_INVALID: u16 = 0xFFFF;
+pub const PROGRAM_PATTERN_INVALID: u8 = 0xFF;
+
+/// シリーズ記述子。Descriptors.cpp:1650。
+#[derive(Clone, Debug, Default)]
+pub struct SeriesDescriptor {
+    pub series_id: u16,
+    pub repeat_label: u8,
+    pub program_pattern: u8,
+    pub expire_date_valid: bool,
+    pub expire_date: DateTime,
+    pub episode_number: u16,
+    pub last_episode_number: u16,
+    pub series_name: Vec<u8>,
+}
+
+impl SeriesDescriptor {
+    pub const TAG: u8 = 0xD5;
+
+    /// Descriptors.cpp:1696
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 8 { return None; }
+        let series_id           = load16(&p[0..2]);
+        let repeat_label        = p[2] >> 4;
+        let program_pattern     = (p[2] & 0x0E) >> 1;
+        let expire_date_valid   = (p[2] & 0x01) != 0;
+        let expire_date = if expire_date_valid {
+            mjd_to_datetime(load16(&p[3..5]))
+        } else { DateTime::default() };
+        let episode_number      = ((p[5] as u16) << 4) | ((p[6] as u16) >> 4);
+        let last_episode_number = (((p[6] & 0x0F) as u16) << 8) | (p[7] as u16);
+        let series_name = if len > 8 { p[8..len].to_vec() } else { vec![] };
+        Some(Self {
+            series_id, repeat_label, program_pattern, expire_date_valid, expire_date,
+            episode_number, last_episode_number, series_name,
+        })
+    }
+}
+
+// ─── EventGroupDescriptor (tag=0xD6) ───────────────────────────
+
+/// イベントグループ記述子のイベント情報。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EventGroupEventInfo {
+    pub network_id: u16,
+    pub transport_stream_id: u16,
+    pub service_id: u16,
+    pub event_id: u16,
+}
+
+/// イベントグループ記述子。Descriptors.cpp:1722。
+#[derive(Clone, Debug, Default)]
+pub struct EventGroupDescriptor {
+    pub group_type: u8,
+    pub event_list: Vec<EventGroupEventInfo>,
+}
+
+impl EventGroupDescriptor {
+    pub const TAG: u8 = 0xD6;
+
+    /// Descriptors.cpp:1762
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let group_type   = p[0] >> 4;
+        let event_count  = (p[0] & 0x0F) as usize;
+        let mut event_list = Vec::new();
+        const NETWORK_ID_INVALID: u16 = 0xFFFF;
+        const TS_ID_INVALID: u16 = 0xFFFF;
+        if group_type != 0x04 && group_type != 0x05 {
+            let mut pos = 1usize;
+            if pos + event_count * 4 > len { return None; }
+            for _ in 0..event_count {
+                event_list.push(EventGroupEventInfo {
+                    service_id:          load16(&p[pos..pos+2]),
+                    event_id:            load16(&p[pos+2..pos+4]),
+                    network_id:          NETWORK_ID_INVALID,
+                    transport_stream_id: TS_ID_INVALID,
+                });
+                pos += 4;
+            }
+        } else {
+            if event_count != 0 { return None; }
+            let mut pos = 1usize;
+            while pos + 8 <= len {
+                event_list.push(EventGroupEventInfo {
+                    network_id:          load16(&p[pos..pos+2]),
+                    transport_stream_id: load16(&p[pos+2..pos+4]),
+                    service_id:          load16(&p[pos+4..pos+6]),
+                    event_id:            load16(&p[pos+6..pos+8]),
+                });
+                pos += 8;
+            }
+        }
+        Some(Self { group_type, event_list })
+    }
+}
+
+// ─── TerrestrialDeliverySystemDescriptor (tag=0xFA) ────────────
+
+/// 地上デジタル伝送方式記述子。Descriptors.cpp:2187。
+#[derive(Clone, Debug, Default)]
+pub struct TerrestrialDeliverySystemDescriptor {
+    pub area_code: u16,
+    pub guard_interval: u8,
+    pub transmission_mode: u8,
+    pub frequency: Vec<u16>,
+}
+
+impl TerrestrialDeliverySystemDescriptor {
+    pub const TAG: u8 = 0xFA;
+
+    /// Descriptors.cpp:2214
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p   = &desc.payload;
+        let len = desc.length as usize;
+        if len < 4 { return None; }
+        let area_code        = ((p[0] as u16) << 4) | ((p[1] as u16) >> 4);
+        let guard_interval   = (p[1] & 0x0C) >> 2;
+        let transmission_mode= p[1] & 0x03;
+        let freq_count = (len - 2) / 2;
+        let mut frequency = Vec::with_capacity(freq_count);
+        for i in 0..freq_count {
+            frequency.push(load16(&p[2+i*2..4+i*2]));
+        }
+        Some(Self { area_code, guard_interval, transmission_mode, frequency })
+    }
+}
+
+// ─── PartialReceptionDescriptor (tag=0xFB) ─────────────────────
+
+/// 部分受信記述子。Descriptors.cpp:2245。
+#[derive(Clone, Debug, Default)]
+pub struct PartialReceptionDescriptor {
+    pub service_list: Vec<u16>,
+}
+
+impl PartialReceptionDescriptor {
+    pub const TAG: u8 = 0xFB;
+
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let p = &desc.payload;
+        let count = (desc.length as usize / 2).min(3);
+        let service_list = (0..count).map(|i| load16(&p[i*2..i*2+2])).collect();
+        Some(Self { service_list })
+    }
+}
+
+// ─── SystemManagementDescriptor (tag=0xFE) ─────────────────────
+
+/// システム管理記述子。Descriptors.cpp:2360。
+#[derive(Clone, Debug, Default)]
+pub struct SystemManagementDescriptor {
+    pub broadcasting_flag: u8,
+    pub broadcasting_id: u8,
+    pub additional_broadcasting_id: u8,
+}
+
+impl SystemManagementDescriptor {
+    pub const TAG: u8 = 0xFE;
+
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 2 { return None; }
+        let p = &desc.payload;
+        Some(Self {
+            broadcasting_flag:          (p[0] & 0xC0) >> 6,
+            broadcasting_id:             p[0] & 0x3F,
+            additional_broadcasting_id:  p[1],
+        })
+    }
+}
+
+// ─── tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── DescriptorBase ──
+
+    #[test]
+    fn test_descriptor_base_parse_valid() {
+        let data = [0x09u8, 0x04, 0x00, 0x01, 0x02, 0x03];
+        let desc = DescriptorBase::parse(&data).unwrap();
+        assert_eq!(desc.tag, 0x09);
+        assert_eq!(desc.length, 4);
+        assert_eq!(desc.payload, &[0x00, 0x01, 0x02, 0x03]);
+        assert!(desc.is_valid());
+        assert_eq!(desc.total_size(), 6);
+    }
+
+    #[test]
+    fn test_descriptor_base_parse_zero_length() {
+        let data = [0x40u8, 0x00];
+        let desc = DescriptorBase::parse(&data).unwrap();
+        assert!(!desc.is_valid());
+    }
+
+    #[test]
+    fn test_descriptor_base_parse_too_short() {
+        assert!(DescriptorBase::parse(&[0x09u8]).is_none());
+    }
+
+    #[test]
+    fn test_descriptor_base_parse_truncated() {
+        assert!(DescriptorBase::parse(&[0x09u8, 0x04, 0x00, 0x01]).is_none());
+    }
+
+    #[test]
+    fn test_descriptor_base_reset() {
+        let mut desc = DescriptorBase::parse(&[0x09u8, 0x02, 0xAA, 0xBB]).unwrap();
+        desc.reset();
+        assert!(!desc.is_valid());
+    }
+
+    // ── DescriptorBlock ──
+
+    #[test]
+    fn test_descriptor_block_parse() {
+        let data = [0x01u8, 0x02, 0xAA, 0xBB, 0x40, 0x01, 0xCC];
+        let mut block = DescriptorBlock::new();
+        assert_eq!(block.parse_block(&data), 2);
+        assert_eq!(block.get_descriptor_count(), 2);
+        assert_eq!(block.get_descriptor_by_index(0).unwrap().tag, 0x01);
+        assert_eq!(block.get_descriptor_by_index(1).unwrap().tag, 0x40);
+    }
+
+    #[test]
+    fn test_descriptor_block_get_by_tag() {
+        let data = [0x09u8, 0x02, 0xAA, 0xBB, 0x40, 0x01, 0xCC];
+        let mut block = DescriptorBlock::new();
+        block.parse_block(&data);
+        assert!(block.get_descriptor_by_tag(0x09).is_some());
+        assert!(block.get_descriptor_by_tag(0xFF).is_none());
+    }
+
+    #[test]
+    fn test_descriptor_block_empty() {
+        let mut block = DescriptorBlock::new();
+        assert_eq!(block.parse_block(&[]), 0);
+    }
+
+    #[test]
+    fn test_descriptor_block_reset() {
+        let mut block = DescriptorBlock::new();
+        block.parse_block(&[0x09u8, 0x02, 0xAA, 0xBB]);
+        block.reset();
+        assert_eq!(block.get_descriptor_count(), 0);
+    }
+
+    #[test]
+    fn test_descriptor_block_iter() {
+        let data = [0x01u8, 0x01, 0xAA, 0x02, 0x01, 0xBB, 0x03, 0x01, 0xCC];
+        let mut block = DescriptorBlock::new();
+        block.parse_block(&data);
+        let tags: Vec<u8> = block.iter().map(|d| d.tag).collect();
+        assert_eq!(tags, vec![0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn test_descriptor_base_equality() {
+        let data = [0x09u8, 0x02, 0x01, 0x02];
+        assert_eq!(
+            DescriptorBase::parse(&data).unwrap(),
+            DescriptorBase::parse(&data).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_descriptor_block_truncated_payload() {
+        let data = [0x01u8, 0x02, 0xAA, 0xBB, 0x40, 0x04, 0xCC];
+        let mut block = DescriptorBlock::new();
+        assert_eq!(block.parse_block(&data), 1);
+    }
+
+    #[test]
+    fn test_descriptor_block_single_byte() {
+        let mut block = DescriptorBlock::new();
+        assert_eq!(block.parse_block(&[0x09u8]), 0);
+    }
+
+    // ── CADescriptor ──
+
+    #[test]
+    fn test_ca_descriptor_parse() {
+        // CA_system_id=0x0005, CA_PID=0x0101, private=[]
+        // pPayload[2] must have 0xE0 set: 0xE1 = 0b11100001
+        let payload = [0x00u8, 0x05, 0xE1, 0x01];
+        let desc = DescriptorBase { tag: 0x09, length: 4, payload: payload.to_vec(), is_valid: true };
+        let ca = CaDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(ca.ca_system_id, 0x0005);
+        assert_eq!(ca.ca_pid, 0x0101);
+        assert!(ca.private_data.is_empty());
+    }
+
+    #[test]
+    fn test_ca_descriptor_wrong_tag() {
+        let desc = DescriptorBase { tag: 0x01, length: 4, payload: vec![0,0,0xE0,0], is_valid: true };
+        assert!(CaDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── NetworkNameDescriptor ──
+
+    #[test]
+    fn test_network_name_descriptor() {
+        let name = b"TestNet";
+        let desc = DescriptorBase { tag: 0x40, length: name.len() as u8, payload: name.to_vec(), is_valid: true };
+        let nd = NetworkNameDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(nd.network_name, name);
+    }
+
+    // ── ServiceListDescriptor ──
+
+    #[test]
+    fn test_service_list_descriptor() {
+        // 2 entries: (0x0001, 0x01), (0x0002, 0x02)
+        let payload = [0x00u8, 0x01, 0x01, 0x00, 0x02, 0x02];
+        let desc = DescriptorBase { tag: 0x41, length: 6, payload: payload.to_vec(), is_valid: true };
+        let sld = ServiceListDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(sld.service_list.len(), 2);
+        assert_eq!(sld.service_list[0].service_id, 1);
+        assert_eq!(sld.service_list[1].service_type, 2);
+    }
+
+    // ── ServiceDescriptor ──
+
+    #[test]
+    fn test_service_descriptor() {
+        // type=0x01, provider_len=3, "ABC", service_len=3, "XYZ"
+        let mut p = vec![0x01u8, 0x03];
+        p.extend_from_slice(b"ABC");
+        p.push(0x03);
+        p.extend_from_slice(b"XYZ");
+        let desc = DescriptorBase { tag: 0x48, length: p.len() as u8, payload: p, is_valid: true };
+        let sd = ServiceDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(sd.service_type, 0x01);
+        assert_eq!(sd.provider_name, b"ABC");
+        assert_eq!(sd.service_name, b"XYZ");
+    }
+
+    // ── ShortEventDescriptor ──
+
+    #[test]
+    fn test_short_event_descriptor() {
+        // lang=0x6A706E ("jpn"), name_len=3, "ABC", desc_len=2, "DE"
+        let mut p = vec![0x6A, 0x70, 0x6E, 0x03];
+        p.extend_from_slice(b"ABC");
+        p.push(0x02);
+        p.extend_from_slice(b"DE");
+        let desc = DescriptorBase { tag: 0x4D, length: p.len() as u8, payload: p, is_valid: true };
+        let sed = ShortEventDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(sed.language_code, 0x6A706E);
+        assert_eq!(sed.event_name, b"ABC");
+        assert_eq!(sed.event_description, b"DE");
+    }
+
+    #[test]
+    fn test_short_event_descriptor_too_short() {
+        let desc = DescriptorBase { tag: 0x4D, length: 3, payload: vec![0,0,0], is_valid: true };
+        assert!(ShortEventDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── ContentDescriptor ──
+
+    #[test]
+    fn test_content_descriptor() {
+        // 2 nibbles: (0x01, 0x02, 0x03, 0x04), (0x05, 0x06, 0x07, 0x08)
+        let payload = [0x12u8, 0x34, 0x56, 0x78];
+        let desc = DescriptorBase { tag: 0x54, length: 4, payload: payload.to_vec(), is_valid: true };
+        let cd = ContentDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(cd.nibble_list.len(), 2);
+        assert_eq!(cd.nibble_list[0].content_nibble_level1, 0x01);
+        assert_eq!(cd.nibble_list[0].content_nibble_level2, 0x02);
+        assert_eq!(cd.nibble_list[1].content_nibble_level1, 0x05);
+    }
+
+    #[test]
+    fn test_content_descriptor_too_large() {
+        let payload = vec![0u8; 16];
+        let desc = DescriptorBase { tag: 0x54, length: 16, payload, is_valid: true };
+        assert!(ContentDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── ComponentDescriptor ──
+
+    #[test]
+    fn test_component_descriptor() {
+        // stream_content=0x01, component_type=0xB3, tag=0x00, lang=jpn
+        let p = vec![0x01u8, 0xB3, 0x00, 0x6A, 0x70, 0x6E];
+        let desc = DescriptorBase { tag: 0x50, length: 6, payload: p, is_valid: true };
+        let cd = ComponentDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(cd.stream_content, 0x01);
+        assert_eq!(cd.component_type, 0xB3);
+        assert!(cd.text.is_empty());
+    }
+
+    #[test]
+    fn test_component_descriptor_wrong_stream_content() {
+        let p = vec![0x02u8, 0xB3, 0x00, 0x6A, 0x70, 0x6E];
+        let desc = DescriptorBase { tag: 0x50, length: 6, payload: p, is_valid: true };
+        assert!(ComponentDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── AudioComponentDescriptor ──
+
+    #[test]
+    fn test_audio_component_descriptor() {
+        // stream_content=0x02, ...
+        let mut p = vec![0x02u8, 0x01, 0x00, 0x0F, 0xFF, 0x40, 0x6A, 0x70, 0x6E];
+        p.extend_from_slice(b"Audio");
+        let desc = DescriptorBase { tag: 0xC4, length: p.len() as u8, payload: p, is_valid: true };
+        let ad = AudioComponentDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(ad.stream_content, 0x02);
+        assert!(ad.main_component_flag);
+        assert_eq!(ad.language_code, 0x6A706E);
+        assert_eq!(&ad.text, b"Audio");
+    }
+
+    #[test]
+    fn test_audio_component_descriptor_wrong_stream_content() {
+        let p = vec![0x01u8, 0x01, 0x00, 0x0F, 0xFF, 0x40, 0x6A, 0x70, 0x6E];
+        let desc = DescriptorBase { tag: 0xC4, length: 9, payload: p, is_valid: true };
+        assert!(AudioComponentDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── SeriesDescriptor ──
+
+    #[test]
+    fn test_series_descriptor() {
+        // series_id=0x0001, byte2=0x00 (repeat=0, pattern=0, expire_valid=0)
+        // MJD for expire=0x0000 (irrelevant), episode=0x001, last=0x001, name="ドラマ"
+        let mut p = vec![0x00u8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x10, 0x01];
+        p.extend_from_slice("ドラマ".as_bytes());
+        let desc = DescriptorBase { tag: 0xD5, length: p.len() as u8, payload: p, is_valid: true };
+        let sd = SeriesDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(sd.series_id, 0x0001);
+        assert!(!sd.expire_date_valid);
+        assert_eq!(sd.episode_number, 1);
+    }
+
+    // ── EventGroupDescriptor ──
+
+    #[test]
+    fn test_event_group_descriptor_basic() {
+        // group_type=0x01, count=2: (svc=0x0001,evt=0x0002), (svc=0x0003,evt=0x0004)
+        let p = vec![0x12u8, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04];
+        let desc = DescriptorBase { tag: 0xD6, length: p.len() as u8, payload: p, is_valid: true };
+        let eg = EventGroupDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(eg.group_type, 0x01);
+        assert_eq!(eg.event_list.len(), 2);
+        assert_eq!(eg.event_list[0].service_id, 1);
+        assert_eq!(eg.event_list[1].event_id, 4);
+    }
+
+    // ── LogoTransmissionDescriptor ──
+
+    #[test]
+    fn test_logo_transmission_cdt1() {
+        // type=1, logo_id(9bit)=0x0005, version(12bit)=0x001, data_id=0x0100
+        // p[1..3] = 0x00 0x05 → logo_id = 5
+        // p[3..5] = 0x00 0x01 → logo_version = 1
+        // p[5..7] = 0x01 0x00 → download_data_id = 0x0100
+        let p = vec![0x01u8, 0x00, 0x05, 0x00, 0x01, 0x01, 0x00];
+        let desc = DescriptorBase { tag: 0xCF, length: 7, payload: p, is_valid: true };
+        let lt = LogoTransmissionDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(lt.logo_transmission_type, 1);
+        assert_eq!(lt.logo_id, 5);
+        assert_eq!(lt.logo_version, 1);
+        assert_eq!(lt.download_data_id, 0x0100);
+    }
+
+    // ── TerrestrialDeliverySystemDescriptor ──
+
+    #[test]
+    fn test_terrestrial_delivery_system() {
+        // area_code = (0xAB<<4)|(0xC0>>4) = 0xABC, guard=0b00, mode=0b01
+        // freq[0]=0x1234
+        let p = vec![0xABu8, 0xC1, 0x12, 0x34];
+        let desc = DescriptorBase { tag: 0xFA, length: 4, payload: p, is_valid: true };
+        let td = TerrestrialDeliverySystemDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(td.area_code, 0xABC);
+        assert_eq!(td.transmission_mode, 1);
+        assert_eq!(td.frequency, vec![0x1234]);
+    }
+
+    // ── PartialReceptionDescriptor ──
+
+    #[test]
+    fn test_partial_reception_descriptor() {
+        let p = vec![0x00u8, 0x01, 0x00, 0x02, 0x00, 0x03];
+        let desc = DescriptorBase { tag: 0xFB, length: 6, payload: p, is_valid: true };
+        let pr = PartialReceptionDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(pr.service_list, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_partial_reception_descriptor_max3() {
+        // 4 entries but capped at 3
+        let p = vec![0x00u8, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04];
+        let desc = DescriptorBase { tag: 0xFB, length: 8, payload: p, is_valid: true };
+        let pr = PartialReceptionDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(pr.service_list.len(), 3);
+    }
+
+    // ── SystemManagementDescriptor ──
+
+    #[test]
+    fn test_system_management_descriptor() {
+        // 0xA5 = 0b10100101: flag=0b10=2, id=0b100101=0x25
+        let p = vec![0xA5u8, 0x07];
+        let desc = DescriptorBase { tag: 0xFE, length: 2, payload: p, is_valid: true };
+        let sm = SystemManagementDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(sm.broadcasting_flag, 2);
+        assert_eq!(sm.broadcasting_id, 0x25);
+        assert_eq!(sm.additional_broadcasting_id, 7);
+    }
+
+    #[test]
+    fn test_system_management_descriptor_wrong_length() {
+        let desc = DescriptorBase { tag: 0xFE, length: 3, payload: vec![0,0,0], is_valid: true };
+        assert!(SystemManagementDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── StreamIDDescriptor ──
+
+    #[test]
+    fn test_stream_id_descriptor() {
+        let desc = DescriptorBase { tag: 0x52, length: 1, payload: vec![0xAB], is_valid: true };
+        let sid = StreamIdDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(sid.component_tag, 0xAB);
+    }
+}

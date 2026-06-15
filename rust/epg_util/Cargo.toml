@@ -1,0 +1,10 @@
+[package]
+name = "tvtest_epg_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's EpgUtil pure logic (video type, genre, ARIB symbol map, genre text table)"
+
+[lib]
+name = "tvtest_epg_util"
+path = "src/lib.rs"

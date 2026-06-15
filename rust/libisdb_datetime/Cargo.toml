@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_datetime"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB DateTime and ARIBTime: MJD/BCD conversion and pure datetime arithmetic"
+
+[lib]
+name = "libisdb_datetime"
+path = "src/lib.rs"
+
+[dependencies]

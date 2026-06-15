@@ -1,0 +1,12 @@
+[package]
+name = "tvtest_channel_list"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's ChannelList: ChannelInfo, ChannelList, TuningSpaceInfo, TuningSpaceList (pure logic, no Win32/GUI)"
+
+[lib]
+name = "tvtest_channel_list"
+path = "src/lib.rs"
+
+[dependencies]

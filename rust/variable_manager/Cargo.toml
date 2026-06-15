@@ -1,0 +1,13 @@
+[package]
+name = "tvtest_variable_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's VariableManager: keyword→value map with callback support (pure logic)"
+
+[lib]
+name = "tvtest_variable_manager"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"

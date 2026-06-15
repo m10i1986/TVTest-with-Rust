@@ -1,0 +1,12 @@
+[package]
+name = "tvtest_settings_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's Settings.cpp type-conversion helpers: bool/color/font parse and format"
+
+[lib]
+name = "tvtest_settings_util"
+path = "src/lib.rs"
+
+[dependencies]

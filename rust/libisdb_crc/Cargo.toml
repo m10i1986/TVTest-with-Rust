@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_crc"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB CRC.cpp: CRC16, CRC16-CCITT, CRC32, CRC32-MPEG2 table-driven calculation"
+
+[lib]
+name = "libisdb_crc"
+path = "src/lib.rs"
+
+[dependencies]

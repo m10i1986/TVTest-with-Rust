@@ -1,0 +1,14 @@
+[package]
+name = "libisdb_epg_data_file"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB EPG/EPGDataFile.cpp: EPG binary file serialization"
+
+[lib]
+name = "libisdb_epg_data_file"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_event_info = { path = "../libisdb_event_info" }
+libisdb_datetime = { path = "../libisdb_datetime" }

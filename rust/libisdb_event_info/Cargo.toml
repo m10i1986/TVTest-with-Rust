@@ -1,0 +1,14 @@
+[package]
+name = "libisdb_event_info"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB EPG/EventInfo.cpp: broadcast event information"
+
+[lib]
+name = "libisdb_event_info"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_datetime = { path = "../libisdb_datetime" }
+bitflags = "2"

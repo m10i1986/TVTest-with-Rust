@@ -1,0 +1,13 @@
+[package]
+name = "tvtest_keyword_search"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CKeywordSearch core (search URL template expansion / percent-encoding / engine list parse)"
+
+[lib]
+name = "tvtest_keyword_search"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_string_utility = { path = "../string_utility" }

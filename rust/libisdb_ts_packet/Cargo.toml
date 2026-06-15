@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_ts_packet"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB TSPacket.cpp: MPEG-2 TS packet parsing"
+
+[lib]
+name = "libisdb_ts_packet"
+path = "src/lib.rs"
+
+[dependencies]

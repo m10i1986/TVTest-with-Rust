@@ -1,0 +1,27 @@
+# TVTest の C++ コードを Rust へ移植したクレート群をまとめるワークスペース。
+# 各モジュールは原実装(src/*.cpp)とプラットフォーム非依存な範囲で挙動を一致させ、
+# Rust の単体テストで等価性を検証する。
+[workspace]
+resolver = "2"
+members = [
+    "string_utility",
+    "path_util",
+    "util",
+    "winutil",
+    "ini_file",
+    "variable_string",
+    "network_definition",
+    "keyword_search",
+    "channel_history",
+    "epg_util",
+    "command_line",
+    "channel_list",
+    "variable_manager",
+    "program_search",
+    "regexp",
+    "program_guide_favorites",
+    "settings_util",
+    "libisdb_datetime",
+    "libisdb_crc", "libisdb_md5", "libisdb_bitrate", "libisdb_bitstream", "libisdb_ts_info", "libisdb_utilities", "libisdb_descriptor", "libisdb_ts_packet", "libisdb_psi_section", "libisdb_pes_packet", "libisdb_adts_parser", "libisdb_mpeg2_video_parser", "libisdb_h26x_parser", "libisdb_pid_map", "libisdb_psi_table", "libisdb_ts_tables", "libisdb_arib_string", "libisdb_event_info", "libisdb_epg_data_file",
+    "epgdatatojson",
+]

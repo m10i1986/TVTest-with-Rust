@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_pid_map"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB PIDMap.cpp: PID routing manager"
+
+[lib]
+name = "libisdb_pid_map"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }

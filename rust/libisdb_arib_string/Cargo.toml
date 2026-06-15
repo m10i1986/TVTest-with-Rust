@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_arib_string"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB ARIBString.cpp + JISKanjiMap.cpp: ARIB 8-unit code to UTF-16 decoder"
+
+[lib]
+name = "libisdb_arib_string"
+path = "src/lib.rs"
+
+[dependencies]

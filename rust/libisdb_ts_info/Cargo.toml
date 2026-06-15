@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_ts_info"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB TSInformation.cpp + LibISDBConsts.hpp: TS stream type/PID/language text helpers"
+
+[lib]
+name = "libisdb_ts_info"
+path = "src/lib.rs"
+
+[dependencies]

@@ -1,0 +1,14 @@
+[package]
+name = "libisdb_h26x_parser"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB H264Parser.cpp + H265Parser.cpp: H.264/H.265 SPS parsing"
+
+[lib]
+name = "libisdb_h26x_parser"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_bitstream = { path = "../libisdb_bitstream" }
+libisdb_mpeg2_video_parser = { path = "../libisdb_mpeg2_video_parser" }
