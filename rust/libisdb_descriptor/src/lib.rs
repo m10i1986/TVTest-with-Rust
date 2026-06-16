@@ -624,6 +624,32 @@ impl EventGroupDescriptor {
     }
 }
 
+// ─── HierarchicalTransmissionDescriptor (tag=0xC0) ─────────────
+
+/// 階層伝送記述子。Descriptors.cpp:720 (StoreContents)。
+/// ワンセグ等の階層伝送で、対応する高階層/低階層 ES を示す。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HierarchicalTransmissionDescriptor {
+    /// 品質レベル (0=低品質/1=高品質)
+    pub quality_level: u8,
+    /// 参照先 PID (reference_PID, 13bit)
+    pub reference_pid: u16,
+}
+
+impl HierarchicalTransmissionDescriptor {
+    pub const TAG: u8 = 0xC0;
+
+    /// Descriptors.cpp:720
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 3 { return None; }
+        let p = &desc.payload;
+        let quality_level = p[0] & 0x01;
+        let reference_pid = load16(&p[1..3]) & 0x1FFF;
+        Some(Self { quality_level, reference_pid })
+    }
+}
+
 // ─── SatelliteDeliverySystemDescriptor (tag=0x43) ──────────────
 
 /// 衛星分配システム記述子。Descriptors.cpp:197 (StoreContents)。
@@ -675,6 +701,134 @@ impl SatelliteDeliverySystemDescriptor {
             frequency, orbital_position, west_east_flag,
             polarization, modulation, symbol_rate, fec_inner,
         })
+    }
+}
+
+// ─── CableDeliverySystemDescriptor (tag=0x44) ──────────────────
+
+/// 有線分配システム記述子。Descriptors.cpp:237 (StoreContents)。
+#[derive(Clone, Debug, Default)]
+pub struct CableDeliverySystemDescriptor {
+    /// 周波数 (BCD 8桁)
+    pub frequency: u32,
+    /// フレームタイプ (4bit)
+    pub frame_type: u8,
+    /// 外符号 (FEC outer, 4bit)
+    pub fec_outer: u8,
+    /// 変調方式 (8bit)
+    pub modulation: u8,
+    /// シンボルレート (BCD 7桁)
+    pub symbol_rate: u32,
+    /// 内符号 (FEC inner, 4bit)
+    pub fec_inner: u8,
+}
+
+impl CableDeliverySystemDescriptor {
+    pub const TAG: u8 = 0x44;
+
+    /// Descriptors.cpp:237
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 11 { return None; }
+        let p = &desc.payload;
+        let frequency   = SatelliteDeliverySystemDescriptor::get_bcd(&p[0..4], 8);
+        let frame_type  = (p[5] >> 4) & 0x0F;
+        let fec_outer   = p[5] & 0x0F;
+        let modulation  = p[6];
+        let symbol_rate = SatelliteDeliverySystemDescriptor::get_bcd(&p[7..11], 7);
+        let fec_inner   = p[10] & 0x0F;
+        Some(Self {
+            frequency, frame_type, fec_outer,
+            modulation, symbol_rate, fec_inner,
+        })
+    }
+}
+
+// ─── ComponentGroupDescriptor (tag=0xD9) ───────────────────────
+
+/// コンポーネントグループ記述子の CA ユニット情報。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComponentGroupCaUnit {
+    pub ca_unit_id: u8,
+    /// このユニットに属する component_tag のリスト
+    pub component_tag: Vec<u8>,
+}
+
+/// コンポーネントグループ記述子のグループ情報。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComponentGroupInfo {
+    pub component_group_id: u8,
+    pub ca_unit_list: Vec<ComponentGroupCaUnit>,
+    /// total_bit_rate (TotalBitRateFlag が false のときは 0)
+    pub total_bit_rate: u8,
+    /// text_char (ARIB 生バイト列)
+    pub text: Vec<u8>,
+}
+
+/// コンポーネントグループ記述子。Descriptors.cpp:1984 (StoreContents)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComponentGroupDescriptor {
+    pub component_group_type: u8,
+    pub total_bit_rate_flag: bool,
+    pub group_list: Vec<ComponentGroupInfo>,
+}
+
+impl ComponentGroupDescriptor {
+    pub const TAG: u8 = 0xD9;
+
+    /// Descriptors.cpp:1984
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let p = &desc.payload;
+
+        let component_group_type = p[0] >> 5;
+        let total_bit_rate_flag  = (p[0] & 0x10) != 0;
+        let num_of_group = (p[0] & 0x0F) as usize;
+
+        let mut group_list = Vec::with_capacity(num_of_group);
+        let mut pos = 1usize;
+
+        for _ in 0..num_of_group {
+            if pos + 2 > len { break; }
+            let mut group = ComponentGroupInfo {
+                component_group_id: p[pos] >> 4,
+                ..Default::default()
+            };
+            let num_of_ca_unit = (p[pos] & 0x0F) as usize;
+            pos += 1;
+
+            for _ in 0..num_of_ca_unit {
+                if pos >= len { return None; }
+                let ca_unit_id = p[pos] >> 4;
+                let num_of_component = (p[pos] & 0x0F) as usize;
+                pos += 1;
+                if pos + num_of_component > len { return None; }
+                let component_tag = p[pos..pos + num_of_component].to_vec();
+                pos += num_of_component;
+                group.ca_unit_list.push(ComponentGroupCaUnit { ca_unit_id, component_tag });
+            }
+
+            if total_bit_rate_flag {
+                if pos >= len { return None; }
+                group.total_bit_rate = p[pos];
+                pos += 1;
+            }
+
+            if pos >= len { return None; }
+            let text_length = p[pos] as usize;
+            pos += 1;
+            if text_length > 0 {
+                if pos + text_length > len { return None; }
+                group.text = p[pos..pos + text_length].to_vec();
+                pos += text_length;
+            }
+
+            group_list.push(group);
+        }
+
+        Some(Self { component_group_type, total_bit_rate_flag, group_list })
     }
 }
 
@@ -1054,6 +1208,30 @@ mod tests {
         assert_eq!(lt.download_data_id, 0x0100);
     }
 
+    // ── HierarchicalTransmissionDescriptor ──
+
+    #[test]
+    fn test_hierarchical_transmission() {
+        // quality_level=1, reference_PID=0x0123 (上位3bitはマスクされる)
+        let payload = vec![0x01, 0xE1, 0x23]; // p[1..3]=0xE123 & 0x1FFF = 0x0123
+        let desc = DescriptorBase { tag: 0xC0, length: 3, payload, is_valid: true };
+        let h = HierarchicalTransmissionDescriptor::from_descriptor(&desc).expect("hierarchical");
+        assert_eq!(h.quality_level, 1);
+        assert_eq!(h.reference_pid, 0x0123);
+    }
+
+    #[test]
+    fn test_hierarchical_transmission_bad_length() {
+        let desc = DescriptorBase { tag: 0xC0, length: 2, payload: vec![0; 2], is_valid: true };
+        assert!(HierarchicalTransmissionDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_hierarchical_transmission_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xC1, length: 3, payload: vec![0; 3], is_valid: true };
+        assert!(HierarchicalTransmissionDescriptor::from_descriptor(&desc).is_none());
+    }
+
     // ── SatelliteDeliverySystemDescriptor ──
 
     #[test]
@@ -1083,6 +1261,105 @@ mod tests {
     fn test_satellite_delivery_system_bad_length() {
         let desc = DescriptorBase { tag: 0x43, length: 5, payload: vec![0; 5], is_valid: true };
         assert!(SatelliteDeliverySystemDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── CableDeliverySystemDescriptor ──
+
+    #[test]
+    fn test_cable_delivery_system() {
+        // frequency BCD 8桁 = 12345678
+        // p[5]: frame_type(4)=0b0101, fec_outer(4)=0b0010 → 0x52
+        // p[6]: modulation = 0x07 (8bit すべて)
+        // symbol_rate BCD 7桁 = 0234560, fec_inner = p[10]&0x0F
+        let payload: [u8; 11] = [
+            0x12, 0x34, 0x56, 0x78, // frequency
+            0x00,                   // 未使用
+            0x52,                   // frame_type(0101)+fec_outer(0010)
+            0x07,                   // modulation (8bit)
+            0x02, 0x34, 0x56, 0x07, // symbol_rate(7) + fec_inner(low nibble)
+        ];
+        let desc = DescriptorBase { tag: 0x44, length: 11, payload: payload.to_vec(), is_valid: true };
+        let c = CableDeliverySystemDescriptor::from_descriptor(&desc).expect("cable");
+        assert_eq!(c.frequency, 12345678);
+        assert_eq!(c.frame_type, 0b0101);
+        assert_eq!(c.fec_outer, 0b0010);
+        assert_eq!(c.modulation, 0x07);
+        assert_eq!(c.symbol_rate, 234560);
+        assert_eq!(c.fec_inner, 0x07);
+    }
+
+    #[test]
+    fn test_cable_delivery_system_bad_length() {
+        let desc = DescriptorBase { tag: 0x44, length: 5, payload: vec![0; 5], is_valid: true };
+        assert!(CableDeliverySystemDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_cable_delivery_system_wrong_tag() {
+        let desc = DescriptorBase { tag: 0x43, length: 11, payload: vec![0; 11], is_valid: true };
+        assert!(CableDeliverySystemDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── ComponentGroupDescriptor ──
+
+    #[test]
+    fn test_component_group_descriptor() {
+        // component_group_type=001, total_bit_rate_flag=1, num_of_group=2
+        // p[0] = 0b001_1_0010 = 0x32
+        // group0: id=1, num_ca_unit=1; ca_unit: id=1, num_comp=2, tags=[0x10,0x11]
+        //   total_bit_rate=0x50; text_len=1, text=[0x41 'A' (ESC省略のため生バイト)]
+        // group1: id=2, num_ca_unit=0; total_bit_rate=0x60; text_len=0
+        let payload: Vec<u8> = vec![
+            0x32,                   // type/flag/num_of_group
+            // group0
+            0x11,                   // group_id=1, num_ca_unit=1
+            0x12,                   // ca_unit_id=1, num_component=2
+            0x10, 0x11,             // component_tags
+            0x50,                   // total_bit_rate
+            0x01, 0x41,             // text_len=1, text
+            // group1
+            0x20,                   // group_id=2, num_ca_unit=0
+            0x60,                   // total_bit_rate
+            0x00,                   // text_len=0
+        ];
+        let desc = DescriptorBase { tag: 0xD9, length: payload.len() as u8, payload, is_valid: true };
+        let cg = ComponentGroupDescriptor::from_descriptor(&desc).expect("component group");
+        assert_eq!(cg.component_group_type, 0b001);
+        assert!(cg.total_bit_rate_flag);
+        assert_eq!(cg.group_list.len(), 2);
+
+        let g0 = &cg.group_list[0];
+        assert_eq!(g0.component_group_id, 1);
+        assert_eq!(g0.ca_unit_list.len(), 1);
+        assert_eq!(g0.ca_unit_list[0].ca_unit_id, 1);
+        assert_eq!(g0.ca_unit_list[0].component_tag, vec![0x10, 0x11]);
+        assert_eq!(g0.total_bit_rate, 0x50);
+        assert_eq!(g0.text, vec![0x41]);
+
+        let g1 = &cg.group_list[1];
+        assert_eq!(g1.component_group_id, 2);
+        assert!(g1.ca_unit_list.is_empty());
+        assert_eq!(g1.total_bit_rate, 0x60);
+        assert!(g1.text.is_empty());
+    }
+
+    #[test]
+    fn test_component_group_no_bitrate_flag() {
+        // total_bit_rate_flag=0, num_of_group=1
+        // p[0] = 0b000_0_0001 = 0x01
+        // group0: id=0, num_ca_unit=0; text_len=0
+        let payload: Vec<u8> = vec![0x01, 0x00, 0x00];
+        let desc = DescriptorBase { tag: 0xD9, length: payload.len() as u8, payload, is_valid: true };
+        let cg = ComponentGroupDescriptor::from_descriptor(&desc).expect("component group");
+        assert!(!cg.total_bit_rate_flag);
+        assert_eq!(cg.group_list.len(), 1);
+        assert_eq!(cg.group_list[0].total_bit_rate, 0);
+    }
+
+    #[test]
+    fn test_component_group_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xD8, length: 1, payload: vec![0x00], is_valid: true };
+        assert!(ComponentGroupDescriptor::from_descriptor(&desc).is_none());
     }
 
     // ── TerrestrialDeliverySystemDescriptor ──

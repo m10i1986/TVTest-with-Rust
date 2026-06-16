@@ -10,7 +10,8 @@
 //   - OnPMTSection の ES 振り分け + component_tag ソート (AnalyzerFilter.cpp:1991-2074)
 //
 // 階層伝送記述子(HierarchicalTransmissionDescriptor)は libisdb_descriptor 未移植のため、
-// quality_level / hierarchical_reference_pid は既定値のまま。component_tag のみ取得する。
+// component_tag(StreamIdDescriptor 0x52) と quality_level/hierarchical_reference_pid
+// (HierarchicalTransmissionDescriptor 0xC0) を取得する。
 
 use libisdb_ts_info::{
     PID_INVALID, STREAM_TYPE_INVALID,
@@ -22,7 +23,8 @@ use libisdb_ts_info::{
 };
 use libisdb_ts_tables::{PMTTable, SDTTable, PATTable};
 use libisdb_descriptor::{
-    StreamIdDescriptor, CaDescriptor, ServiceDescriptor, LogoTransmissionDescriptor,
+    StreamIdDescriptor, HierarchicalTransmissionDescriptor,
+    CaDescriptor, ServiceDescriptor, LogoTransmissionDescriptor,
 };
 use libisdb_arib_string::{decode_to_string, DecodeFlags};
 
@@ -168,6 +170,14 @@ pub fn build_service_info(pmt: &PMTTable, service_id: u16, pmt_pid: u16) -> Serv
             }
         }
 
+        // 階層伝送情報(HierarchicalTransmissionDescriptor 0xC0) を取得 (AnalyzerFilter.cpp:2003)
+        for desc in item.descriptors.iter() {
+            if let Some(htd) = HierarchicalTransmissionDescriptor::from_descriptor(desc) {
+                es.quality_level = htd.quality_level;
+                es.hierarchical_reference_pid = htd.reference_pid;
+            }
+        }
+
         info.es_list.push(es);
 
         if is_video_stream_type(es.stream_type) {
@@ -305,6 +315,38 @@ mod tests {
         sec.push(0xC1); // version=0, current_next=1
         sec.push(0x00); // section_number
         sec.push(0x00); // last_section_number
+        sec.extend_from_slice(&body);
+        let crc = libisdb_crc_calc(&sec);
+        sec.extend_from_slice(&crc.to_be_bytes());
+        sec
+    }
+
+    /// ES ごとに生記述子バイト列を渡せる PMT セクション構築ヘルパ。
+    /// es: (stream_type, pid, es_descriptors_raw)。
+    fn build_pmt_section_raw_es(
+        program_number: u16,
+        pcr_pid: u16,
+        es: &[(u8, u16, Vec<u8>)],
+    ) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&((0xE000 | (pcr_pid & 0x1FFF)).to_be_bytes()));
+        body.extend_from_slice(&0xF000u16.to_be_bytes()); // program_info_length=0
+        for (stream_type, pid, es_desc) in es {
+            body.push(*stream_type);
+            body.extend_from_slice(&((0xE000 | (pid & 0x1FFF)).to_be_bytes()));
+            body.extend_from_slice(&((0xF000 | (es_desc.len() as u16 & 0x0FFF)).to_be_bytes()));
+            body.extend_from_slice(es_desc);
+        }
+        let table_id = 0x02u8;
+        let section_length = 5 + body.len() + 4;
+        let mut sec = Vec::new();
+        sec.push(table_id);
+        sec.push(0xB0 | ((section_length >> 8) as u8));
+        sec.push((section_length & 0xFF) as u8);
+        sec.extend_from_slice(&program_number.to_be_bytes());
+        sec.push(0xC1);
+        sec.push(0x00);
+        sec.push(0x00);
         sec.extend_from_slice(&body);
         let crc = libisdb_crc_calc(&sec);
         sec.extend_from_slice(&crc.to_be_bytes());
@@ -510,6 +552,37 @@ mod tests {
         let table = make_pmt_table(0x1FC8, &section);
         let info = build_service_info(&table, 0x0400, 0x1FC8);
         assert_eq!(info.video_es_list[0].component_tag, COMPONENT_TAG_INVALID);
+    }
+
+    #[test]
+    fn test_build_service_info_hierarchical_transmission() {
+        // ES に StreamIdDescriptor(0x52) と HierarchicalTransmissionDescriptor(0xC0) を付与。
+        // 0xC0: quality_level=1, reference_PID=0x0123
+        let es_desc = vec![
+            0x52, 0x01, 0x05,             // StreamIdDescriptor component_tag=0x05
+            0xC0, 0x03, 0x01, 0xE1, 0x23, // Hierarchical: quality=1, ref_pid=0x0123
+        ];
+        let section = build_pmt_section_raw_es(
+            0x0400, 0x0100, &[(STREAM_TYPE_H264, 0x0100, es_desc)],
+        );
+        let table = make_pmt_table(0x1FC8, &section);
+        let info = build_service_info(&table, 0x0400, 0x1FC8);
+        assert_eq!(info.es_list.len(), 1);
+        let es = &info.es_list[0];
+        assert_eq!(es.component_tag, 0x05);
+        assert_eq!(es.quality_level, 1);
+        assert_eq!(es.hierarchical_reference_pid, 0x0123);
+    }
+
+    #[test]
+    fn test_build_service_info_no_hierarchical_defaults() {
+        // 階層伝送記述子が無ければ quality_level/hierarchical_reference_pid は既定値
+        let es = [(STREAM_TYPE_H264, 0x0100, None)];
+        let section = build_pmt_section(0x0400, 0x0100, &[], &es);
+        let table = make_pmt_table(0x1FC8, &section);
+        let info = build_service_info(&table, 0x0400, 0x1FC8);
+        assert_eq!(info.es_list[0].quality_level, 0xFF);
+        assert_eq!(info.es_list[0].hierarchical_reference_pid, PID_INVALID);
     }
 
     #[test]

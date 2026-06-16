@@ -10,14 +10,14 @@
 //   - 各 TS の transport_stream_id / original_network_id
 //   - ServiceListDescriptor(0x41)              → service_list
 //   - TerrestrialDeliverySystemDescriptor(0xFA) → terrestrial (地上波伝送情報)
+//   - SatelliteDeliverySystemDescriptor(0x43)   → satellite (衛星伝送情報)
+//   - CableDeliverySystemDescriptor(0x44)       → cable (有線伝送情報)
 //   - PartialReceptionDescriptor(0xFB)         → partial_reception_service_list (部分受信)
-//
-// 衛星伝送系記述子(SatelliteDeliverySystemDescriptor)は libisdb_descriptor 未移植のため対象外。
 
 use libisdb_ts_tables::NITTable;
 use libisdb_descriptor::{
     ServiceListDescriptor, TerrestrialDeliverySystemDescriptor, PartialReceptionDescriptor,
-    SatelliteDeliverySystemDescriptor,
+    SatelliteDeliverySystemDescriptor, CableDeliverySystemDescriptor,
 };
 
 /// NIT のサービスリストエントリ。ServiceListDescriptor::ServiceInfo 相当。
@@ -48,6 +48,17 @@ pub struct SatelliteDeliverySystemInfo {
     pub fec_inner: u8,
 }
 
+/// 有線伝送系情報。AnalyzerFilter.hpp:CableDeliverySystemInfo。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CableDeliverySystemInfo {
+    pub frequency: u32,
+    pub frame_type: u8,
+    pub fec_outer: u8,
+    pub modulation: u8,
+    pub symbol_rate: u32,
+    pub fec_inner: u8,
+}
+
 /// NIT 配下の TS 情報。AnalyzerFilter.hpp:NetworkStreamInfo。
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct NetworkStreamInfo {
@@ -58,6 +69,8 @@ pub struct NetworkStreamInfo {
     pub terrestrial: Option<TerrestrialDeliverySystemInfo>,
     /// 衛星伝送系情報(あれば)
     pub satellite: Option<SatelliteDeliverySystemInfo>,
+    /// 有線伝送系情報(あれば)
+    pub cable: Option<CableDeliverySystemInfo>,
     /// 部分受信対象のサービス ID リスト(あれば)
     pub partial_reception_service_list: Vec<u16>,
 }
@@ -114,6 +127,21 @@ pub fn build_network_stream_list(nit: &NITTable) -> Vec<NetworkStreamInfo> {
                     modulation: sd.modulation,
                     symbol_rate: sd.symbol_rate,
                     fec_inner: sd.fec_inner,
+                });
+                break;
+            }
+        }
+
+        // CableDeliverySystemDescriptor(0x44): 有線伝送系
+        for desc in ts.descriptors.iter() {
+            if let Some(cd) = CableDeliverySystemDescriptor::from_descriptor(desc) {
+                info.cable = Some(CableDeliverySystemInfo {
+                    frequency: cd.frequency,
+                    frame_type: cd.frame_type,
+                    fec_outer: cd.fec_outer,
+                    modulation: cd.modulation,
+                    symbol_rate: cd.symbol_rate,
+                    fec_inner: cd.fec_inner,
                 });
                 break;
             }
@@ -208,6 +236,22 @@ mod tests {
             0x02, 0x34, 0x56, 0x07,
         ];
         let mut d = vec![0x43, p.len() as u8];
+        d.extend_from_slice(&p);
+        d
+    }
+
+    /// CableDeliverySystemDescriptor(0x44) を組み立てる。
+    fn build_cable_desc() -> Vec<u8> {
+        // frequency BCD 8桁=12345678, p[5]=0x52(frame_type=0101,fec_outer=0010),
+        // modulation=0x07, symbol_rate BCD 7桁=0234560, fec_inner=0x07
+        let p: [u8; 11] = [
+            0x12, 0x34, 0x56, 0x78,
+            0x00,
+            0x52,
+            0x07,
+            0x02, 0x34, 0x56, 0x07,
+        ];
+        let mut d = vec![0x44, p.len() as u8];
         d.extend_from_slice(&p);
         d
     }
@@ -322,6 +366,25 @@ mod tests {
         assert_eq!(sat.fec_inner, 0x07);
         // 地上波は無し
         assert!(ts.terrestrial.is_none());
+    }
+
+    #[test]
+    fn test_build_network_stream_cable() {
+        let mut descs = build_service_list_desc(&[(0x0400, 0x01)]);
+        descs.extend_from_slice(&build_cable_desc());
+        let nit = make_nit_table(0x0004, 0x6020, 0x0004, &descs);
+        let list = build_network_stream_list(&nit);
+        let ts = &list[0];
+        let cab = ts.cable.as_ref().expect("cable info");
+        assert_eq!(cab.frequency, 12345678);
+        assert_eq!(cab.frame_type, 0b0101);
+        assert_eq!(cab.fec_outer, 0b0010);
+        assert_eq!(cab.modulation, 0x07);
+        assert_eq!(cab.symbol_rate, 234560);
+        assert_eq!(cab.fec_inner, 0x07);
+        // 地上波・衛星は無し
+        assert!(ts.terrestrial.is_none());
+        assert!(ts.satellite.is_none());
     }
 
     #[test]

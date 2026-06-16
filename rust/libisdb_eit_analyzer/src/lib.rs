@@ -23,6 +23,7 @@ use libisdb_ts_tables::{EITTable, EITEventInfo};
 use libisdb_descriptor::{
     ShortEventDescriptor, ExtendedEventDescriptor, ContentDescriptor,
     ComponentDescriptor, AudioComponentDescriptor, EventGroupDescriptor,
+    ComponentGroupDescriptor, SeriesDescriptor,
 };
 use libisdb_arib_string::{decode_to_string, DecodeFlags};
 
@@ -185,6 +186,106 @@ pub fn build_event_list(eit: &EITTable) -> Vec<EventInfo> {
         }
     }
     list
+}
+
+/// イベントのコンポーネントグループ内 CA ユニット情報。
+/// AnalyzerFilter.hpp:EventComponentGroupInfo::CAUnitInfo 相当。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct EventCaUnitInfo {
+    pub ca_unit_id: u8,
+    pub component_tag: Vec<u8>,
+}
+
+/// イベントのコンポーネントグループ情報。
+/// AnalyzerFilter.hpp:EventComponentGroupInfo 相当(Text は ARIB デコード済み)。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct EventComponentGroupInfo {
+    pub component_group_id: u8,
+    pub ca_unit_list: Vec<EventCaUnitInfo>,
+    pub total_bit_rate: u8,
+    pub text: String,
+}
+
+/// EIT イベントの ComponentGroupDescriptor(0xD9) から コンポーネントグループ一覧を構築する。
+/// AnalyzerFilter.cpp:1358 (GetEventComponentGroupList)。
+/// 記述子が無い場合は空 Vec を返す。
+pub fn build_event_component_group_list(event: &EITEventInfo) -> Vec<EventComponentGroupInfo> {
+    for desc in event.descriptors.iter() {
+        if let Some(cg) = ComponentGroupDescriptor::from_descriptor(desc) {
+            return cg
+                .group_list
+                .iter()
+                .map(|g| EventComponentGroupInfo {
+                    component_group_id: g.component_group_id,
+                    ca_unit_list: g
+                        .ca_unit_list
+                        .iter()
+                        .map(|u| EventCaUnitInfo {
+                            ca_unit_id: u.ca_unit_id,
+                            component_tag: u.component_tag.clone(),
+                        })
+                        .collect(),
+                    total_bit_rate: g.total_bit_rate,
+                    text: decode_aribstr(&g.text),
+                })
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// component_tag からコンポーネントグループの index を返す。
+/// AnalyzerFilter.cpp:1398 (GetEventComponentGroupIndexByComponentTag)。見つからなければ None。
+pub fn find_event_component_group_index_by_tag(
+    event: &EITEventInfo,
+    component_tag: u8,
+) -> Option<usize> {
+    let groups = build_event_component_group_list(event);
+    for (i, g) in groups.iter().enumerate() {
+        for u in &g.ca_unit_list {
+            if u.component_tag.contains(&component_tag) {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// イベントのシリーズ情報。AnalyzerFilter.hpp:EventSeriesInfo 相当。
+/// AnalyzerFilter.cpp:1229 (GetEventSeriesInfo)。SeriesName は ARIB デコード済み。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct EventSeriesInfo {
+    pub series_id: u16,
+    pub repeat_label: u8,
+    pub program_pattern: u8,
+    /// 満了日が有効なときのみ Some。
+    pub expire_date: Option<libisdb_datetime::DateTime>,
+    pub episode_number: u16,
+    pub last_episode_number: u16,
+    pub series_name: String,
+}
+
+/// EIT イベントの SeriesDescriptor(0xD5) から シリーズ情報を構築する。
+/// AnalyzerFilter.cpp:1229 (GetEventSeriesInfo)。記述子が無ければ None。
+pub fn build_event_series_info(event: &EITEventInfo) -> Option<EventSeriesInfo> {
+    for desc in event.descriptors.iter() {
+        if let Some(sd) = SeriesDescriptor::from_descriptor(desc) {
+            return Some(EventSeriesInfo {
+                series_id: sd.series_id,
+                repeat_label: sd.repeat_label,
+                program_pattern: sd.program_pattern,
+                expire_date: if sd.expire_date_valid {
+                    Some(sd.expire_date.clone())
+                } else {
+                    None
+                },
+                episode_number: sd.episode_number,
+                last_episode_number: sd.last_episode_number,
+                series_name: decode_aribstr(&sd.series_name),
+            });
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -507,6 +608,133 @@ mod tests {
         assert_eq!(ev.event_group_list[0].event_list[0].event_id, 0x1111);
         assert_eq!(ev.event_group_list[0].event_list[1].service_id, 0x0402);
         assert_eq!(ev.event_group_list[0].event_list[1].event_id, 0x2222);
+    }
+
+    /// ComponentGroupDescriptor(0xD9) を組み立てる(マルチビューTV相当)。
+    /// group0: id=1, ca_unit{id=1, tags=[0x10,0x11]}, total_bit_rate=0x50, text
+    fn build_component_group_desc(text: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        // component_group_type=001, total_bit_rate_flag=1, num_of_group=1 → 0x31
+        p.push(0x31);
+        // group0
+        p.push(0x11); // group_id=1, num_ca_unit=1
+        p.push(0x12); // ca_unit_id=1, num_component=2
+        p.push(0x10);
+        p.push(0x11);
+        p.push(0x50); // total_bit_rate
+        p.push(text.len() as u8);
+        p.extend_from_slice(text);
+        let mut d = vec![0xD9, p.len() as u8];
+        d.extend_from_slice(&p);
+        d
+    }
+
+    #[test]
+    fn test_build_event_component_group_list() {
+        // text は ARIB G0=Alphanumeric に切替えて 'Ａ'
+        let text: &[u8] = &[0x1B, 0x28, 0x4A, 0x41];
+        let descs = build_component_group_desc(text);
+        let eit = make_eit_table(
+            0x0400, 0x7FE0, 0x0004, 0x1234, START_TIME, DURATION, 4, false, &descs,
+        );
+        let ev = eit.get_event(0).expect("event");
+        let groups = build_event_component_group_list(ev);
+        assert_eq!(groups.len(), 1);
+        let g = &groups[0];
+        assert_eq!(g.component_group_id, 1);
+        assert_eq!(g.ca_unit_list.len(), 1);
+        assert_eq!(g.ca_unit_list[0].ca_unit_id, 1);
+        assert_eq!(g.ca_unit_list[0].component_tag, vec![0x10, 0x11]);
+        assert_eq!(g.total_bit_rate, 0x50);
+        assert_eq!(g.text, "Ａ");
+    }
+
+    #[test]
+    fn test_find_event_component_group_index_by_tag() {
+        let descs = build_component_group_desc(&[]);
+        let eit = make_eit_table(
+            0x0400, 0x7FE0, 0x0004, 0x1234, START_TIME, DURATION, 4, false, &descs,
+        );
+        let ev = eit.get_event(0).expect("event");
+        assert_eq!(find_event_component_group_index_by_tag(ev, 0x11), Some(0));
+        assert_eq!(find_event_component_group_index_by_tag(ev, 0xFF), None);
+    }
+
+    #[test]
+    fn test_build_event_component_group_list_empty() {
+        // ComponentGroupDescriptor 無し → 空
+        let sed = build_short_event_desc(0x6A706E, &[], &[]);
+        let eit = make_eit_table(
+            0x0400, 0x7FE0, 0x0004, 0x1234, START_TIME, DURATION, 4, false, &sed,
+        );
+        let ev = eit.get_event(0).expect("event");
+        assert!(build_event_component_group_list(ev).is_empty());
+    }
+
+    /// SeriesDescriptor(0xD5) を組み立てる。expire_date_valid は flag で制御。
+    fn build_series_desc(
+        series_id: u16,
+        repeat_label: u8,
+        program_pattern: u8,
+        expire_valid: bool,
+        mjd: u16,
+        episode: u16,
+        last_episode: u16,
+        name: &[u8],
+    ) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&series_id.to_be_bytes());
+        // repeat_label(4) + program_pattern(3) + expire_date_valid(1)
+        p.push((repeat_label << 4) | ((program_pattern & 0x07) << 1) | (expire_valid as u8));
+        p.extend_from_slice(&mjd.to_be_bytes()); // expire_date MJD (2バイト)
+        // episode_number(12bit) + last_episode_number(12bit) → 3バイト
+        p.push((episode >> 4) as u8);
+        p.push((((episode & 0x0F) as u8) << 4) | ((last_episode >> 8) as u8 & 0x0F));
+        p.push((last_episode & 0xFF) as u8);
+        p.extend_from_slice(name);
+        let mut d = vec![0xD5, p.len() as u8];
+        d.extend_from_slice(&p);
+        d
+    }
+
+    #[test]
+    fn test_build_event_series_info() {
+        let name: &[u8] = &[0x1B, 0x28, 0x4A, 0x41]; // 'Ａ'
+        let descs = build_series_desc(0x1234, 0x05, 0x02, false, 0, 3, 12, name);
+        let eit = make_eit_table(
+            0x0400, 0x7FE0, 0x0004, 0x1234, START_TIME, DURATION, 4, false, &descs,
+        );
+        let ev = eit.get_event(0).expect("event");
+        let si = build_event_series_info(ev).expect("series info");
+        assert_eq!(si.series_id, 0x1234);
+        assert_eq!(si.repeat_label, 0x05);
+        assert_eq!(si.program_pattern, 0x02);
+        assert!(si.expire_date.is_none());
+        assert_eq!(si.episode_number, 3);
+        assert_eq!(si.last_episode_number, 12);
+        assert_eq!(si.series_name, "Ａ");
+    }
+
+    #[test]
+    fn test_build_event_series_info_expire_valid() {
+        // expire_valid=true なら expire_date は Some
+        let descs = build_series_desc(0x0001, 0, 0, true, 60000, 1, 1, &[]);
+        let eit = make_eit_table(
+            0x0400, 0x7FE0, 0x0004, 0x1234, START_TIME, DURATION, 4, false, &descs,
+        );
+        let ev = eit.get_event(0).expect("event");
+        let si = build_event_series_info(ev).expect("series info");
+        assert!(si.expire_date.is_some());
+    }
+
+    #[test]
+    fn test_build_event_series_info_none() {
+        let sed = build_short_event_desc(0x6A706E, &[], &[]);
+        let eit = make_eit_table(
+            0x0400, 0x7FE0, 0x0004, 0x1234, START_TIME, DURATION, 4, false, &sed,
+        );
+        let ev = eit.get_event(0).expect("event");
+        assert!(build_event_series_info(ev).is_none());
     }
 
     #[test]
