@@ -1,0 +1,21 @@
+[package]
+name = "libisdb_ts_packet_parser_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Filters/TSPacketParserFilter.cpp: TS packet sync/parse/count/sequence filter with 1seg PAT generation"
+
+[lib]
+name = "libisdb_ts_packet_parser_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_descriptor = { path = "../libisdb_descriptor" }
+libisdb_one_seg_pat_generator = { path = "../libisdb_one_seg_pat_generator" }
+
+[dev-dependencies]
+libisdb_crc = { path = "../libisdb_crc" }

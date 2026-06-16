@@ -39,4 +39,5 @@ members = [
     "libisdb_epg_database",
     "libisdb_data_streamer",
     "libisdb_filter_base",
+    "libisdb_ts_packet_parser_filter",
 ]

@@ -139,7 +139,11 @@ impl DataStream for VecDataStream {
 // ---------------------------------------------------------------------------
 
 /// データ受け取りインターフェース。C++ の `FilterSink` 仮想クラスに対応する。
-pub trait FilterSink: Send + Sync {
+///
+/// 注: `Send`/`Sync` はトレイト境界に焼き込まない。C++ のフィルタは PSI テーブル
+/// (`Box<dyn FnMut>` を内包し非 Send)等を保持するため、スレッド境界を跨ぐ
+/// 必要がある使用箇所で `Box<dyn FilterSink + Send>` のように個別付与する設計とする。
+pub trait FilterSink {
     fn receive_data(&mut self, stream: &mut dyn DataStream) -> bool;
 }
 
@@ -230,7 +234,9 @@ impl<const N: usize> Default for MultiOutputSlots<N> {
 /// フィルタ基底 trait。C++ の `FilterBase` 仮想クラスに対応する。
 ///
 /// 各フィルタはこの trait を実装し、必要に応じて `FilterSink` も実装する。
-pub trait FilterBase: Send + Sync {
+///
+/// `FilterSink` と同様に `Send`/`Sync` は焼き込まない(使用箇所で個別付与)。
+pub trait FilterBase {
     /// フィルタを初期化する。C++ の `Initialize()`。
     fn initialize(&mut self) -> bool { true }
 
@@ -259,9 +265,9 @@ pub trait FilterBase: Send + Sync {
 
 /// クロージャを `FilterSink` として使うためのラッパ。
 /// テスト等でシンプルな受け口が欲しい場合に便利。
-pub struct FilterFn<F: FnMut(&mut dyn DataStream) -> bool + Send + Sync>(pub F);
+pub struct FilterFn<F: FnMut(&mut dyn DataStream) -> bool>(pub F);
 
-impl<F: FnMut(&mut dyn DataStream) -> bool + Send + Sync> FilterSink for FilterFn<F> {
+impl<F: FnMut(&mut dyn DataStream) -> bool> FilterSink for FilterFn<F> {
     fn receive_data(&mut self, stream: &mut dyn DataStream) -> bool {
         (self.0)(stream)
     }
