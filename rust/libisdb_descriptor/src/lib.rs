@@ -1452,6 +1452,68 @@ impl TSInformationDescriptor {
     }
 }
 
+// ─── EmergencyInformationDescriptor (tag=0xFC) ─────────────────
+
+/// 緊急情報のサービス情報。Descriptors.hpp:1258。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmergencyServiceInfo {
+    pub service_id: u16,
+    pub start_end_flag: bool,
+    pub signal_level: bool,
+    /// area_code のリスト
+    pub area_code_list: Vec<u16>,
+}
+
+/// 緊急情報記述子。Descriptors.cpp:2276。
+#[derive(Clone, Debug, Default)]
+pub struct EmergencyInformationDescriptor {
+    pub service_list: Vec<EmergencyServiceInfo>,
+}
+
+impl EmergencyInformationDescriptor {
+    pub const TAG: u8 = 0xFC;
+
+    /// Descriptors.cpp:2276
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        let p = &desc.payload;
+
+        let mut service_list = Vec::new();
+        let mut pos = 0usize;
+
+        // 原実装どおり「4バイト読める間」ループ。長さ不正は break で打ち切り。
+        while pos + 4 <= len {
+            let service_id = load16(&p[pos..pos + 2]);
+            let start_end_flag = (p[pos + 2] & 0x80) != 0;
+            let signal_level = (p[pos + 2] & 0x40) != 0;
+
+            let area_code_length = p[pos + 3] as usize;
+            pos += 4;
+            // area_code_length が奇数 or 範囲外なら、原実装は直前の要素を捨てて break
+            if area_code_length % 2 != 0 || pos + area_code_length > len {
+                break;
+            }
+
+            let mut area_code_list = Vec::with_capacity(area_code_length / 2);
+            for _ in 0..(area_code_length / 2) {
+                // area_code は 12bit (上位ビット詰め): Load16 >> 4
+                area_code_list.push(load16(&p[pos..pos + 2]) >> 4);
+                pos += 2;
+            }
+
+            service_list.push(EmergencyServiceInfo {
+                service_id,
+                start_end_flag,
+                signal_level,
+                area_code_list,
+            });
+        }
+
+        Some(Self { service_list })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2401,5 +2463,87 @@ mod tests {
             is_valid: true,
         };
         assert!(TSInformationDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── EmergencyInformationDescriptor (0xFC) ──
+
+    #[test]
+    fn test_emergency_information_descriptor_basic() {
+        // service0: sid=0x0410, start_end=1, signal=0, area_code_length=2
+        //           area_code = 0x0AB0 >> 4 = 0x00AB
+        // service1: sid=0x0411, start_end=0, signal=1, area_code_length=0
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&[0x04, 0x10, 0x80, 0x02, 0x0A, 0xB0]);
+        payload.extend_from_slice(&[0x04, 0x11, 0x40, 0x00]);
+        let desc = DescriptorBase {
+            tag: 0xFC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = EmergencyInformationDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.service_list.len(), 2);
+
+        assert_eq!(d.service_list[0].service_id, 0x0410);
+        assert!(d.service_list[0].start_end_flag);
+        assert!(!d.service_list[0].signal_level);
+        assert_eq!(d.service_list[0].area_code_list, vec![0x00AB]);
+
+        assert_eq!(d.service_list[1].service_id, 0x0411);
+        assert!(!d.service_list[1].start_end_flag);
+        assert!(d.service_list[1].signal_level);
+        assert!(d.service_list[1].area_code_list.is_empty());
+    }
+
+    #[test]
+    fn test_emergency_information_descriptor_empty() {
+        let desc = DescriptorBase {
+            tag: 0xFC,
+            length: 0,
+            payload: vec![],
+            is_valid: true,
+        };
+        let d = EmergencyInformationDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.service_list.is_empty());
+    }
+
+    #[test]
+    fn test_emergency_information_descriptor_odd_area_code_length() {
+        // area_code_length=1 (奇数) → 直前要素を捨てて break。結果は空。
+        let payload = vec![0x04, 0x10, 0x80, 0x01, 0x0A];
+        let desc = DescriptorBase {
+            tag: 0xFC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = EmergencyInformationDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.service_list.is_empty());
+    }
+
+    #[test]
+    fn test_emergency_information_descriptor_area_code_truncated() {
+        // area_code_length=4 だが本体に 2 バイトしか無い → break。結果は空。
+        let payload = vec![0x04, 0x10, 0x80, 0x04, 0x0A, 0xB0];
+        let desc = DescriptorBase {
+            tag: 0xFC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = EmergencyInformationDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.service_list.is_empty());
+    }
+
+    #[test]
+    fn test_emergency_information_descriptor_wrong_tag() {
+        let payload = vec![0x04, 0x10, 0x80, 0x00];
+        let desc = DescriptorBase {
+            tag: 0xFD,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(EmergencyInformationDescriptor::from_descriptor(&desc).is_none());
     }
 }
