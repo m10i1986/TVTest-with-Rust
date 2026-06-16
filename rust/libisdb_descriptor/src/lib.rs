@@ -2053,6 +2053,183 @@ impl HyperLinkDescriptor {
     }
 }
 
+// ─── DownloadContentDescriptor (tag=0xC9) ──────────────────────
+
+/// 互換性記述子内のサブ記述子。Descriptors.hpp:662 (SubDescriptorInfo)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadCompatibilitySubDescriptor {
+    pub sub_descriptor_type: u8,
+    /// additionalInformation (生バイト列)
+    pub additional_information: Vec<u8>,
+}
+
+/// 互換性記述子。Descriptors.hpp:667 (DescriptorInfo)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadCompatibilityDescriptorInfo {
+    pub descriptor_type: u8,
+    pub specifier_type: u8,
+    pub specifier_data: u32,
+    pub model: u16,
+    pub version: u16,
+    pub sub_descriptor_list: Vec<DownloadCompatibilitySubDescriptor>,
+}
+
+/// モジュール情報。Descriptors.hpp:679 (ModuleInfo)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadModuleInfo {
+    pub module_id: u16,
+    pub module_size: u32,
+    /// module_info_byte (生バイト列)
+    pub module_info_byte: Vec<u8>,
+}
+
+/// ダウンロードコンテンツ記述子。Descriptors.cpp:1114 (StoreContents)。
+///
+/// 原実装の `DownloadContentInfo`(Descriptors.hpp:685) をそのまま構造体化する。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadContentDescriptor {
+    pub reboot: bool,
+    pub add_on: bool,
+    pub compatibility_flag: bool,
+    pub module_info_flag: bool,
+    pub text_info_flag: bool,
+    pub component_size: u32,
+    pub download_id: u32,
+    pub time_out_value_dii: u32,
+    pub leak_rate: u32,
+    pub component_tag: u8,
+    pub compatibility_descriptor_list: Vec<DownloadCompatibilityDescriptorInfo>,
+    pub module_list: Vec<DownloadModuleInfo>,
+    /// private_data_byte (生バイト列)
+    pub private_data: Vec<u8>,
+    /// ISO_639_language_code (text_info_flag 時のみ有効)
+    pub language_code: u32,
+    /// text_char (ARIB 生バイト列, text_info_flag 時のみ)
+    pub text: Vec<u8>,
+}
+
+impl DownloadContentDescriptor {
+    pub const TAG: u8 = 0xC9;
+
+    /// Descriptors.cpp:1114
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 18 { return None; }
+        let p = &desc.payload;
+
+        let mut info = DownloadContentDescriptor {
+            reboot: (p[0] & 0x80) != 0,
+            add_on: (p[0] & 0x40) != 0,
+            compatibility_flag: (p[0] & 0x20) != 0,
+            module_info_flag: (p[0] & 0x10) != 0,
+            // 注意: 原実装は text_info_flag も 0x80 を参照している(Descriptors.cpp:1125)。
+            // reboot と同じビットを見るが、原実装に忠実に移植する。
+            text_info_flag: (p[0] & 0x80) != 0,
+            component_size: load32(&p[1..5]),
+            download_id: load32(&p[5..9]),
+            time_out_value_dii: load32(&p[9..13]),
+            leak_rate: load24(&p[13..16]) >> 2,
+            component_tag: p[16],
+            ..Default::default()
+        };
+
+        let mut pos = 17usize;
+
+        // ── compatibility descriptor ──
+        if info.compatibility_flag {
+            if pos + 4 > len { return None; }
+            let _compatibility_descriptor_length = load16(&p[pos..pos + 2]);
+            let descriptor_count = load16(&p[pos + 2..pos + 4]);
+            pos += 4;
+            if pos + _compatibility_descriptor_length as usize > len { return None; }
+
+            for _ in 0..descriptor_count {
+                if pos + 11 > len { return None; }
+                let descriptor_type = p[pos];
+                // p[pos+1] は DescriptorLength(原実装では未使用)
+                let specifier_type = p[pos + 2];
+                let specifier_data = load24(&p[pos + 3..pos + 6]);
+                let model = load16(&p[pos + 6..pos + 8]);
+                let version = load16(&p[pos + 8..pos + 10]);
+                let sub_descriptor_count = p[pos + 10];
+                pos += 11;
+
+                let mut sub_descriptor_list =
+                    Vec::with_capacity(sub_descriptor_count as usize);
+                for _ in 0..sub_descriptor_count {
+                    if pos + 2 > len { return None; }
+                    let sub_descriptor_type = p[pos];
+                    let sub_descriptor_length = p[pos + 1] as usize;
+                    pos += 2;
+                    if pos + sub_descriptor_length > len { return None; }
+                    sub_descriptor_list.push(DownloadCompatibilitySubDescriptor {
+                        sub_descriptor_type,
+                        additional_information: p[pos..pos + sub_descriptor_length].to_vec(),
+                    });
+                    pos += sub_descriptor_length;
+                }
+
+                info.compatibility_descriptor_list.push(
+                    DownloadCompatibilityDescriptorInfo {
+                        descriptor_type,
+                        specifier_type,
+                        specifier_data,
+                        model,
+                        version,
+                        sub_descriptor_list,
+                    },
+                );
+            }
+        }
+
+        // ── module list ──
+        if info.module_info_flag {
+            // 原実装(Descriptors.cpp:1172)は num_of_modules 読み取り前に境界チェックを
+            // 行っていないが、Rust ではスライス範囲外で panic するため安全側で None を返す。
+            if pos + 2 > len { return None; }
+            let num_of_modules = load16(&p[pos..pos + 2]);
+            // 原実装は num_of_modules を読んだ後 Pos を進めない。よってループ初回の
+            // module_id は num_of_modules と同じ 2 バイトを再読み込みする構造になる
+            // (原実装どおりに忠実移植)。
+            for _ in 0..num_of_modules {
+                if pos + 7 > len { return None; }
+                let module_id = load16(&p[pos..pos + 2]);
+                let module_size = load32(&p[pos + 2..pos + 6]);
+                let module_info_length = p[pos + 6] as usize;
+                pos += 7;
+                if pos + module_info_length > len { return None; }
+                info.module_list.push(DownloadModuleInfo {
+                    module_id,
+                    module_size,
+                    module_info_byte: p[pos..pos + module_info_length].to_vec(),
+                });
+                pos += module_info_length;
+            }
+        }
+
+        // ── private data ──
+        if pos >= len { return None; }
+        let private_data_length = p[pos] as usize;
+        pos += 1;
+        if pos + private_data_length > len { return None; }
+        info.private_data = p[pos..pos + private_data_length].to_vec();
+        pos += private_data_length;
+
+        // ── text ──
+        if info.text_info_flag {
+            if pos + 4 > len { return None; }
+            info.language_code = load24(&p[pos..pos + 3]);
+            let text_length = p[pos + 3] as usize;
+            if text_length > 0 && pos + 4 + text_length <= len {
+                info.text = p[pos + 4..pos + 4 + text_length].to_vec();
+            }
+        }
+
+        Some(info)
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -3790,5 +3967,176 @@ mod tests {
             is_valid: true,
         };
         assert!(HyperLinkDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── DownloadContentDescriptor ──
+    fn make_dlcontent_desc(payload: Vec<u8>) -> DescriptorBase {
+        DescriptorBase {
+            tag: 0xC9,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        }
+    }
+
+    /// 固定17バイトヘッダを組み立てる(flags 以外は既知値)。
+    fn dlcontent_header(flags: u8) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.push(flags); // p[0]: flags
+        v.extend_from_slice(&[0x00, 0x00, 0x10, 0x00]); // component_size = 0x1000
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x55]); // download_id = 0x55
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x0A]); // time_out_value_DII = 0x0A
+        v.extend_from_slice(&[0x00, 0x00, 0x10]); // leak_rate(24bit)=0x10 → >>2 = 0x04
+        v.push(0x77); // component_tag = 0x77
+        v
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_minimal() {
+        // 全フラグ off + private_data(length=0)
+        let mut payload = dlcontent_header(0x00);
+        payload.push(0x00); // private_data_length = 0
+        let desc = make_dlcontent_desc(payload);
+        let d = DownloadContentDescriptor::from_descriptor(&desc).unwrap();
+        assert!(!d.reboot);
+        assert!(!d.add_on);
+        assert!(!d.compatibility_flag);
+        assert!(!d.module_info_flag);
+        assert!(!d.text_info_flag);
+        assert_eq!(d.component_size, 0x1000);
+        assert_eq!(d.download_id, 0x55);
+        assert_eq!(d.time_out_value_dii, 0x0A);
+        assert_eq!(d.leak_rate, 0x04); // 0x10 >> 2
+        assert_eq!(d.component_tag, 0x77);
+        assert!(d.compatibility_descriptor_list.is_empty());
+        assert!(d.module_list.is_empty());
+        assert!(d.private_data.is_empty());
+        assert!(d.text.is_empty());
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_flags() {
+        // add_on(0x40) のみ立てる
+        let mut payload = dlcontent_header(0x40);
+        payload.push(0x00); // private_data_length = 0
+        let desc = make_dlcontent_desc(payload);
+        let d = DownloadContentDescriptor::from_descriptor(&desc).unwrap();
+        assert!(!d.reboot);
+        assert!(d.add_on);
+        assert!(!d.compatibility_flag);
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_private_data() {
+        let mut payload = dlcontent_header(0x00);
+        payload.push(0x03); // private_data_length = 3
+        payload.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+        let desc = make_dlcontent_desc(payload);
+        let d = DownloadContentDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.private_data, vec![0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_module_info() {
+        // module_info_flag(0x10)。num_of_modules を読んだ後 Pos は進めず、
+        // 最初の module_id は num_of_modules と同じ2バイトを読む(原実装どおり)。
+        // よって num_of_modules=0x0001 を ModuleID=0x0001 として読む形でテスト。
+        let mut payload = dlcontent_header(0x10);
+        payload.extend_from_slice(&[0x00, 0x01]); // num_of_modules=1 兼 module_id
+        payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x20]); // module_size=0x20
+        payload.push(0x02); // module_info_length=2
+        payload.extend_from_slice(&[0xDE, 0xAD]); // module_info_byte
+        payload.push(0x00); // private_data_length = 0
+        let desc = make_dlcontent_desc(payload);
+        let d = DownloadContentDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.module_info_flag);
+        assert_eq!(d.module_list.len(), 1);
+        assert_eq!(d.module_list[0].module_id, 0x0001);
+        assert_eq!(d.module_list[0].module_size, 0x20);
+        assert_eq!(d.module_list[0].module_info_byte, vec![0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_compatibility() {
+        // compatibility_flag(0x20)。descriptor 1件 + sub_descriptor 1件。
+        let mut payload = dlcontent_header(0x20);
+        payload.extend_from_slice(&[0x00, 0x0F]); // compatibility_descriptor_length=15
+        payload.extend_from_slice(&[0x00, 0x01]); // descriptor_count=1
+        // descriptor (11 bytes)
+        payload.push(0xA0); // descriptor_type
+        payload.push(0x0B); // descriptor_length (未使用)
+        payload.push(0x01); // specifier_type
+        payload.extend_from_slice(&[0x02, 0x03, 0x04]); // specifier_data(24bit)
+        payload.extend_from_slice(&[0x05, 0x06]); // model
+        payload.extend_from_slice(&[0x07, 0x08]); // version
+        payload.push(0x01); // sub_descriptor_count=1
+        // sub_descriptor (2 + 2 bytes)
+        payload.push(0xB0); // sub_descriptor_type
+        payload.push(0x02); // sub_descriptor_length=2
+        payload.extend_from_slice(&[0x11, 0x22]); // additional_information
+        payload.push(0x00); // private_data_length = 0
+        let desc = make_dlcontent_desc(payload);
+        let d = DownloadContentDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.compatibility_flag);
+        assert_eq!(d.compatibility_descriptor_list.len(), 1);
+        let cd = &d.compatibility_descriptor_list[0];
+        assert_eq!(cd.descriptor_type, 0xA0);
+        assert_eq!(cd.specifier_type, 0x01);
+        assert_eq!(cd.specifier_data, 0x020304);
+        assert_eq!(cd.model, 0x0506);
+        assert_eq!(cd.version, 0x0708);
+        assert_eq!(cd.sub_descriptor_list.len(), 1);
+        assert_eq!(cd.sub_descriptor_list[0].sub_descriptor_type, 0xB0);
+        assert_eq!(
+            cd.sub_descriptor_list[0].additional_information,
+            vec![0x11, 0x22]
+        );
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_text() {
+        // text_info_flag は p[0]&0x80(reboot と共有ビット, 原実装どおり)。
+        let mut payload = dlcontent_header(0x80); // → reboot=true, text_info_flag=true
+        payload.push(0x00); // private_data_length = 0
+        // text: language_code(24bit)=0x6A_70_6E ("jpn"), text_length=2, text=[0x41,0x42]
+        payload.extend_from_slice(&[0x6A, 0x70, 0x6E]); // language_code
+        payload.push(0x02); // text_length
+        payload.extend_from_slice(&[0x41, 0x42]); // text_char
+        let desc = make_dlcontent_desc(payload);
+        let d = DownloadContentDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.reboot); // 0x80 共有のため reboot も立つ
+        assert!(d.text_info_flag);
+        assert_eq!(d.language_code, 0x6A_70_6E);
+        assert_eq!(d.text, vec![0x41, 0x42]);
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_too_short() {
+        // len < 18 → None
+        let payload = vec![0x00u8; 17];
+        let desc = make_dlcontent_desc(payload);
+        assert!(DownloadContentDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_private_data_overrun() {
+        // private_data_length が末尾を超える → None
+        let mut payload = dlcontent_header(0x00); // 17 bytes
+        payload.push(0x05); // private_data_length=5 だが後続バイト無し
+        let desc = make_dlcontent_desc(payload); // len=18
+        assert!(DownloadContentDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_dlcontent_descriptor_wrong_tag() {
+        let mut payload = dlcontent_header(0x00);
+        payload.push(0x00);
+        let desc = DescriptorBase {
+            tag: 0xC8,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(DownloadContentDescriptor::from_descriptor(&desc).is_none());
     }
 }
