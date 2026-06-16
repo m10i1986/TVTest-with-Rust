@@ -37,7 +37,6 @@ fn load16(data: &[u8]) -> u16 {
 fn load24(data: &[u8]) -> u32 {
     ((data[0] as u32) << 16) | ((data[1] as u32) << 8) | (data[2] as u32)
 }
-#[allow(dead_code)]
 fn load32(data: &[u8]) -> u32 {
     ((data[0] as u32) << 24) | ((data[1] as u32) << 16) | ((data[2] as u32) << 8) | (data[3] as u32)
 }
@@ -1882,6 +1881,178 @@ impl LDTLinkageDescriptor {
     }
 }
 
+// ─── HyperLinkDescriptor (tag=0xC5) ────────────────────────────
+
+/// ハイパーリンク記述子の selector 情報。
+/// 原実装は union 風の固定 struct(Descriptors.hpp:506) だが、Rust では
+/// link_destination_type に対応する enum で表現する。
+/// link_destination_type が未知/未対応(0x00 や 0x08 以上)の場合は `None_` となり、
+/// selector は解析されない(原実装の switch default 相当)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HyperLinkSelector {
+    /// link_to_service (0x01)
+    LinkToService {
+        original_network_id: u16,
+        transport_stream_id: u16,
+        service_id: u16,
+    },
+    /// link_to_event (0x02)
+    LinkToEvent {
+        original_network_id: u16,
+        transport_stream_id: u16,
+        service_id: u16,
+        event_id: u16,
+    },
+    /// link_to_module (0x03)
+    LinkToModule {
+        original_network_id: u16,
+        transport_stream_id: u16,
+        service_id: u16,
+        event_id: u16,
+        component_tag: u8,
+        module_id: u16,
+    },
+    /// link_to_content (0x04)
+    LinkToContent {
+        original_network_id: u16,
+        transport_stream_id: u16,
+        service_id: u16,
+        content_id: u32,
+    },
+    /// link_to_content_module (0x05)
+    LinkToContentModule {
+        original_network_id: u16,
+        transport_stream_id: u16,
+        service_id: u16,
+        content_id: u32,
+        component_tag: u8,
+        module_id: u16,
+    },
+    /// link_to_ert_node (0x06)
+    LinkToErtNode {
+        information_provider_id: u16,
+        transport_stream_id: u16,
+        node_id: u16,
+    },
+    /// link_to_stored_content (0x07)。uri_char(selector 全バイト)。
+    LinkToStoredContent {
+        uri_char: Vec<u8>,
+    },
+    /// 上記以外(未解析)
+    None_,
+}
+
+/// ハイパーリンク記述子。Descriptors.cpp:936 (StoreContents)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HyperLinkDescriptor {
+    pub hyper_linkage_type: u8,
+    pub link_destination_type: u8,
+    pub selector_length: u8,
+    pub selector: HyperLinkSelector,
+}
+
+impl HyperLinkDescriptor {
+    pub const TAG: u8 = 0xC5;
+
+    // link_destination_type (Descriptors.hpp:498-504)
+    pub const LINK_DESTINATION_TYPE_LINK_TO_SERVICE: u8 = 0x01;
+    pub const LINK_DESTINATION_TYPE_LINK_TO_EVENT: u8 = 0x02;
+    pub const LINK_DESTINATION_TYPE_LINK_TO_MODULE: u8 = 0x03;
+    pub const LINK_DESTINATION_TYPE_LINK_TO_CONTENT: u8 = 0x04;
+    pub const LINK_DESTINATION_TYPE_LINK_TO_CONTENT_MODULE: u8 = 0x05;
+    pub const LINK_DESTINATION_TYPE_LINK_TO_ERT_MODE: u8 = 0x06;
+    pub const LINK_DESTINATION_TYPE_LINK_TO_STORED_CONTENT: u8 = 0x07;
+
+    /// Descriptors.cpp:936
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 3 { return None; }
+        let p = &desc.payload;
+
+        let hyper_linkage_type = p[0];
+        let link_destination_type = p[1];
+        let selector_length = p[2];
+
+        // 原実装: 3 + SelectorLength > m_Length なら false
+        if 3 + selector_length as usize > len { return None; }
+        let sl = selector_length as usize;
+
+        let selector = match link_destination_type {
+            Self::LINK_DESTINATION_TYPE_LINK_TO_SERVICE => {
+                if sl != 6 { return None; }
+                HyperLinkSelector::LinkToService {
+                    original_network_id: load16(&p[3..5]),
+                    transport_stream_id: load16(&p[5..7]),
+                    service_id: load16(&p[7..9]),
+                }
+            }
+            Self::LINK_DESTINATION_TYPE_LINK_TO_EVENT => {
+                if sl != 8 { return None; }
+                HyperLinkSelector::LinkToEvent {
+                    original_network_id: load16(&p[3..5]),
+                    transport_stream_id: load16(&p[5..7]),
+                    service_id: load16(&p[7..9]),
+                    event_id: load16(&p[9..11]),
+                }
+            }
+            Self::LINK_DESTINATION_TYPE_LINK_TO_MODULE => {
+                if sl != 11 { return None; }
+                HyperLinkSelector::LinkToModule {
+                    original_network_id: load16(&p[3..5]),
+                    transport_stream_id: load16(&p[5..7]),
+                    service_id: load16(&p[7..9]),
+                    event_id: load16(&p[9..11]),
+                    component_tag: p[11],
+                    module_id: load16(&p[12..14]),
+                }
+            }
+            Self::LINK_DESTINATION_TYPE_LINK_TO_CONTENT => {
+                if sl != 10 { return None; }
+                HyperLinkSelector::LinkToContent {
+                    original_network_id: load16(&p[3..5]),
+                    transport_stream_id: load16(&p[5..7]),
+                    service_id: load16(&p[7..9]),
+                    content_id: load32(&p[9..13]),
+                }
+            }
+            Self::LINK_DESTINATION_TYPE_LINK_TO_CONTENT_MODULE => {
+                if sl != 13 { return None; }
+                HyperLinkSelector::LinkToContentModule {
+                    original_network_id: load16(&p[3..5]),
+                    transport_stream_id: load16(&p[5..7]),
+                    service_id: load16(&p[7..9]),
+                    content_id: load32(&p[9..13]),
+                    component_tag: p[13],
+                    module_id: load16(&p[14..16]),
+                }
+            }
+            Self::LINK_DESTINATION_TYPE_LINK_TO_ERT_MODE => {
+                if sl != 6 { return None; }
+                HyperLinkSelector::LinkToErtNode {
+                    information_provider_id: load16(&p[3..5]),
+                    transport_stream_id: load16(&p[5..7]),
+                    node_id: load16(&p[7..9]),
+                }
+            }
+            Self::LINK_DESTINATION_TYPE_LINK_TO_STORED_CONTENT => {
+                // 原実装: 長さチェック無しで selector_length バイトをコピー
+                HyperLinkSelector::LinkToStoredContent {
+                    uri_char: p[3..3 + sl].to_vec(),
+                }
+            }
+            _ => HyperLinkSelector::None_,
+        };
+
+        Some(Self {
+            hyper_linkage_type,
+            link_destination_type,
+            selector_length,
+            selector,
+        })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -3423,5 +3594,201 @@ mod tests {
             is_valid: true,
         };
         assert!(LDTLinkageDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── HyperLinkDescriptor ──
+    fn make_hyperlink_desc(payload: Vec<u8>) -> DescriptorBase {
+        DescriptorBase {
+            tag: 0xC5,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        }
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_service() {
+        // hyper_linkage_type=0x01, link_destination_type=0x01, selector_length=6,
+        // onid=0x1111, tsid=0x2222, sid=0x3333
+        let payload = vec![
+            0x01, 0x01, 0x06, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33,
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.hyper_linkage_type, 0x01);
+        assert_eq!(d.link_destination_type, 0x01);
+        assert_eq!(d.selector_length, 6);
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToService {
+                original_network_id: 0x1111,
+                transport_stream_id: 0x2222,
+                service_id: 0x3333,
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_event() {
+        // link_destination_type=0x02, selector_length=8, +event_id=0x4444
+        let payload = vec![
+            0x01, 0x02, 0x08, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44,
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToEvent {
+                original_network_id: 0x1111,
+                transport_stream_id: 0x2222,
+                service_id: 0x3333,
+                event_id: 0x4444,
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_module() {
+        // link_destination_type=0x03, selector_length=11,
+        // +event_id=0x4444, component_tag=0x55, module_id=0x6677
+        let payload = vec![
+            0x01, 0x03, 0x0B, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44, 0x55,
+            0x66, 0x77,
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToModule {
+                original_network_id: 0x1111,
+                transport_stream_id: 0x2222,
+                service_id: 0x3333,
+                event_id: 0x4444,
+                component_tag: 0x55,
+                module_id: 0x6677,
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_content() {
+        // link_destination_type=0x04, selector_length=10, content_id=0x44556677 (u32)
+        let payload = vec![
+            0x01, 0x04, 0x0A, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x55, 0x66,
+            0x77,
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToContent {
+                original_network_id: 0x1111,
+                transport_stream_id: 0x2222,
+                service_id: 0x3333,
+                content_id: 0x4455_6677,
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_content_module() {
+        // link_destination_type=0x05, selector_length=13,
+        // content_id=0x44556677, component_tag=0x88, module_id=0x99AA
+        let payload = vec![
+            0x01, 0x05, 0x0D, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x55, 0x66,
+            0x77, 0x88, 0x99, 0xAA,
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToContentModule {
+                original_network_id: 0x1111,
+                transport_stream_id: 0x2222,
+                service_id: 0x3333,
+                content_id: 0x4455_6677,
+                component_tag: 0x88,
+                module_id: 0x99AA,
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_ert_node() {
+        // link_destination_type=0x06, selector_length=6,
+        // information_provider_id=0x1111, tsid=0x2222, node_id=0x3333
+        let payload = vec![
+            0x01, 0x06, 0x06, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33,
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToErtNode {
+                information_provider_id: 0x1111,
+                transport_stream_id: 0x2222,
+                node_id: 0x3333,
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_link_to_stored_content() {
+        // link_destination_type=0x07, selector_length=任意(=4), uri_char をそのまま
+        let payload = vec![
+            0x01, 0x07, 0x04, b'h', b't', b't', b'p',
+        ];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(
+            d.selector,
+            HyperLinkSelector::LinkToStoredContent {
+                uri_char: b"http".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_unknown_type() {
+        // link_destination_type=0x00 (未対応) → None_ で selector 未解析だが成功
+        let payload = vec![0x01, 0x00, 0x00];
+        let desc = make_hyperlink_desc(payload);
+        let d = HyperLinkDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.selector, HyperLinkSelector::None_);
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_bad_selector_length() {
+        // link_to_service なのに selector_length が 6 でない (=4) → None
+        let payload = vec![0x01, 0x01, 0x04, 0x11, 0x11, 0x22, 0x22];
+        let desc = make_hyperlink_desc(payload);
+        assert!(HyperLinkDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_selector_length_exceeds() {
+        // 3 + selector_length > len → None
+        let payload = vec![0x01, 0x01, 0x06, 0x11, 0x11]; // len=5, 3+6=9 > 5
+        let desc = make_hyperlink_desc(payload);
+        assert!(HyperLinkDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_too_short() {
+        let payload = vec![0x01, 0x01]; // 2 < 3
+        let desc = make_hyperlink_desc(payload);
+        assert!(HyperLinkDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_hyperlink_descriptor_wrong_tag() {
+        let payload = vec![0x01, 0x01, 0x06, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33];
+        let desc = DescriptorBase {
+            tag: 0xC4,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(HyperLinkDescriptor::from_descriptor(&desc).is_none());
     }
 }
