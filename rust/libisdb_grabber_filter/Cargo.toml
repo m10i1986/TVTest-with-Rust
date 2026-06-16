@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_grabber_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Filters/GrabberFilter.cpp: data grabber/observer filter with per-buffer filtering"
+
+[lib]
+name = "libisdb_grabber_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }

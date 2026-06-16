@@ -41,4 +41,6 @@ members = [
     "libisdb_filter_base",
     "libisdb_ts_packet_parser_filter",
     "libisdb_tee_filter",
+    "libisdb_ts_packet_counter_filter",
+    "libisdb_grabber_filter",
 ]
