@@ -44,4 +44,5 @@ members = [
     "libisdb_ts_packet_counter_filter",
     "libisdb_grabber_filter",
     "libisdb_service_selector_filter",
+    "libisdb_caption_filter",
 ]
