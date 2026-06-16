@@ -1,0 +1,21 @@
+[package]
+name = "libisdb_service_selector_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Filters/ServiceSelectorFilter.cpp: service/stream selection filter (StreamSelector integration)"
+
+[lib]
+name = "libisdb_service_selector_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_descriptor = { path = "../libisdb_descriptor" }
+libisdb_stream_selector = { path = "../libisdb_stream_selector" }
+
+[dev-dependencies]
+libisdb_crc = { path = "../libisdb_crc" }
