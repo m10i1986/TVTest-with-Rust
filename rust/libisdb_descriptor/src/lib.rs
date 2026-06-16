@@ -1716,6 +1716,50 @@ impl CaServiceDescriptor {
     }
 }
 
+// ─── TargetRegionDescriptor (tag=0xC6) ─────────────────────────
+
+/// 対象地域記述子。Descriptors.cpp:1044 (StoreContents)。
+///
+/// `region_spec_type` が BS(0x01) の場合のみ prefecture_bitmap(7バイト) を解析する。
+/// その際 length は厳密に 1+7=8 でなければならず、不一致なら無効(None)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TargetRegionDescriptor {
+    pub region_spec_type: u8,
+    /// region_spec_type == REGION_SPEC_TYPE_BS のときのみ有効な prefecture_bitmap。
+    pub bs_prefecture_bitmap: Option<[u8; 7]>,
+}
+
+impl TargetRegionDescriptor {
+    pub const TAG: u8 = 0xC6;
+
+    /// region_spec_type = bs_prefecture_spec (Descriptors.hpp:588)
+    pub const REGION_SPEC_TYPE_BS: u8 = 0x01;
+
+    /// Descriptors.cpp:1044
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let p = &desc.payload;
+
+        let region_spec_type = p[0];
+        let mut bs_prefecture_bitmap = None;
+
+        if region_spec_type == Self::REGION_SPEC_TYPE_BS {
+            // 原実装: m_Length != 1 + 7 なら false
+            if len != 1 + 7 { return None; }
+            let mut bitmap = [0u8; 7];
+            bitmap.copy_from_slice(&p[1..8]);
+            bs_prefecture_bitmap = Some(bitmap);
+        }
+
+        Some(Self {
+            region_spec_type,
+            bs_prefecture_bitmap,
+        })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -3021,5 +3065,77 @@ mod tests {
             is_valid: true,
         };
         assert!(CaServiceDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── TargetRegionDescriptor ──
+    #[test]
+    fn test_target_region_descriptor_bs() {
+        // region_spec_type=0x01 (BS) + prefecture_bitmap 7バイト
+        let payload = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
+        let desc = DescriptorBase {
+            tag: 0xC6,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = TargetRegionDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.region_spec_type, TargetRegionDescriptor::REGION_SPEC_TYPE_BS);
+        assert_eq!(
+            d.bs_prefecture_bitmap,
+            Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77])
+        );
+    }
+
+    #[test]
+    fn test_target_region_descriptor_non_bs() {
+        // region_spec_type が BS 以外なら bitmap は解析しない (length は任意)
+        let payload = vec![0x02, 0xAA];
+        let desc = DescriptorBase {
+            tag: 0xC6,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = TargetRegionDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.region_spec_type, 0x02);
+        assert_eq!(d.bs_prefecture_bitmap, None);
+    }
+
+    #[test]
+    fn test_target_region_descriptor_bs_bad_length() {
+        // BS なのに length が 8 でない (=7) → None
+        let payload = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let desc = DescriptorBase {
+            tag: 0xC6,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(TargetRegionDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_target_region_descriptor_empty() {
+        // length < 1 → None
+        let payload: Vec<u8> = vec![];
+        let desc = DescriptorBase {
+            tag: 0xC6,
+            length: 0,
+            payload,
+            is_valid: true,
+        };
+        assert!(TargetRegionDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_target_region_descriptor_wrong_tag() {
+        let payload = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
+        let desc = DescriptorBase {
+            tag: 0xC5,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(TargetRegionDescriptor::from_descriptor(&desc).is_none());
     }
 }
