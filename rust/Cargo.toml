@@ -27,4 +27,5 @@ members = [
     "libisdb_one_seg_pat_generator",
     "libisdb_caption_parser",
     "libisdb_stream_selector",
+    "libisdb_pmt_analyzer",
 ]
