@@ -624,6 +624,60 @@ impl EventGroupDescriptor {
     }
 }
 
+// ─── SatelliteDeliverySystemDescriptor (tag=0x43) ──────────────
+
+/// 衛星分配システム記述子。Descriptors.cpp:197 (StoreContents)。
+#[derive(Clone, Debug, Default)]
+pub struct SatelliteDeliverySystemDescriptor {
+    /// 周波数 (BCD 8桁: GHz単位×100000、例 0x012345678→12.345678GHz相当の生BCD値)
+    pub frequency: u32,
+    /// 軌道位置 (BCD 4桁)
+    pub orbital_position: u16,
+    /// 東経/西経フラグ (true=東経)
+    pub west_east_flag: bool,
+    /// 偏波 (2bit)
+    pub polarization: u8,
+    /// 変調方式 (5bit)
+    pub modulation: u8,
+    /// シンボルレート (BCD 7桁)
+    pub symbol_rate: u32,
+    /// 内符号 (FEC inner, 4bit)
+    pub fec_inner: u8,
+}
+
+impl SatelliteDeliverySystemDescriptor {
+    pub const TAG: u8 = 0x43;
+
+    /// 連続する `digits` 個の BCD ニブルを数値に変換する。
+    fn get_bcd(p: &[u8], digits: usize) -> u32 {
+        let mut value: u32 = 0;
+        for i in 0..digits {
+            let byte = p[i / 2];
+            let nibble = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F };
+            value = value * 10 + nibble as u32;
+        }
+        value
+    }
+
+    /// Descriptors.cpp:197
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 11 { return None; }
+        let p = &desc.payload;
+        let frequency       = Self::get_bcd(&p[0..4], 8);
+        let orbital_position = Self::get_bcd(&p[4..6], 4) as u16;
+        let west_east_flag  = (p[6] & 0x80) != 0;
+        let polarization    = (p[6] >> 5) & 0x03;
+        let modulation      = p[6] & 0x1F;
+        let symbol_rate     = Self::get_bcd(&p[7..11], 7);
+        let fec_inner       = p[10] & 0x0F;
+        Some(Self {
+            frequency, orbital_position, west_east_flag,
+            polarization, modulation, symbol_rate, fec_inner,
+        })
+    }
+}
+
 // ─── TerrestrialDeliverySystemDescriptor (tag=0xFA) ────────────
 
 /// 地上デジタル伝送方式記述子。Descriptors.cpp:2187。
@@ -998,6 +1052,37 @@ mod tests {
         assert_eq!(lt.logo_id, 5);
         assert_eq!(lt.logo_version, 1);
         assert_eq!(lt.download_data_id, 0x0100);
+    }
+
+    // ── SatelliteDeliverySystemDescriptor ──
+
+    #[test]
+    fn test_satellite_delivery_system() {
+        // frequency BCD 8桁 = 12345678, orbital_position BCD 4桁 = 1100
+        // p[6]: west_east(1)=1, polarization(2)=01, modulation(5)=00001 → 0b1010_0001 = 0xA1
+        // symbol_rate BCD 7桁 = 0234560 (上位7ニブル), fec_inner = p[10]&0x0F
+        let payload: [u8; 11] = [
+            0x12, 0x34, 0x56, 0x78, // frequency
+            0x11, 0x00,             // orbital_position
+            0xA1,                   // we(1)+pol(01)+mod(00001)
+            0x02, 0x34, 0x56, 0x07, // symbol_rate(7) + fec_inner(low nibble of p[10])
+        ];
+        let desc = DescriptorBase { tag: 0x43, length: 11, payload: payload.to_vec(), is_valid: true };
+        let s = SatelliteDeliverySystemDescriptor::from_descriptor(&desc).expect("satellite");
+        assert_eq!(s.frequency, 12345678);
+        assert_eq!(s.orbital_position, 1100);
+        assert!(s.west_east_flag);
+        assert_eq!(s.polarization, 0b01);
+        assert_eq!(s.modulation, 0b00001);
+        // symbol_rate: BCD 7桁 = p[7..]の上位7ニブル = 0,2,3,4,5,6,0
+        assert_eq!(s.symbol_rate, 234560);
+        assert_eq!(s.fec_inner, 0x07);
+    }
+
+    #[test]
+    fn test_satellite_delivery_system_bad_length() {
+        let desc = DescriptorBase { tag: 0x43, length: 5, payload: vec![0; 5], is_valid: true };
+        assert!(SatelliteDeliverySystemDescriptor::from_descriptor(&desc).is_none());
     }
 
     // ── TerrestrialDeliverySystemDescriptor ──

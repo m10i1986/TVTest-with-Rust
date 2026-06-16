@@ -29,4 +29,5 @@ members = [
     "libisdb_stream_selector",
     "libisdb_pmt_analyzer",
     "libisdb_eit_analyzer",
+    "libisdb_nit_analyzer",
 ]

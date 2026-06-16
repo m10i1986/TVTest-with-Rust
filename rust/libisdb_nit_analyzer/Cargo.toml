@@ -1,0 +1,18 @@
+[package]
+name = "libisdb_nit_analyzer"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB AnalyzerFilter NIT->NetworkStreamInfo construction logic"
+
+[lib]
+name = "libisdb_nit_analyzer"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_descriptor = { path = "../libisdb_descriptor" }
+
+[dev-dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_crc = { path = "../libisdb_crc" }
