@@ -1573,6 +1573,149 @@ impl LocalTimeOffsetDescriptor {
     }
 }
 
+// ─── CAEMMTSDescriptor (tag=0xCA) ──────────────────────────────
+
+/// CA EMM TS 記述子。Descriptors.cpp:1232。
+#[derive(Clone, Debug, Default)]
+pub struct CaEmmTsDescriptor {
+    pub ca_system_id: u16,
+    pub transport_stream_id: u16,
+    pub original_network_id: u16,
+    pub power_supply_period: u8,
+}
+
+impl CaEmmTsDescriptor {
+    pub const TAG: u8 = 0xCA;
+
+    /// Descriptors.cpp:1232
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 7 { return None; }
+        let p = &desc.payload;
+        Some(Self {
+            ca_system_id:        load16(&p[0..2]),
+            transport_stream_id: load16(&p[2..4]),
+            original_network_id: load16(&p[4..6]),
+            power_supply_period: p[6],
+        })
+    }
+}
+
+// ─── CAContractInfoDescriptor (tag=0xCB) ───────────────────────
+
+/// CA 契約情報記述子。Descriptors.cpp:1298。
+#[derive(Clone, Debug, Default)]
+pub struct CaContractInfoDescriptor {
+    pub ca_system_id: u16,
+    pub ca_unit_id: u8,
+    /// component_tag のリスト (num_of_component 件)
+    pub component_tag: Vec<u8>,
+    /// contract_verification_info (生バイト列)
+    pub contract_verification_info: Vec<u8>,
+    /// fee_name (ARIB文字列・生バイト列)
+    pub fee_name: Vec<u8>,
+}
+
+impl CaContractInfoDescriptor {
+    pub const TAG: u8 = 0xCB;
+    pub const MAX_NUM_OF_COMPONENT: usize = 12;
+    pub const MAX_VERIFICATION_INFO_LENGTH: usize = 172;
+
+    /// Descriptors.cpp:1298
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 7 { return None; }
+        let p = &desc.payload;
+
+        let ca_system_id = load16(&p[0..2]);
+        let ca_unit_id = p[2] >> 4;
+        if ca_unit_id == 0x0 { return None; }
+
+        // Component Tag
+        let num_of_component = (p[2] & 0x0F) as usize;
+        if num_of_component == 0
+            || num_of_component > Self::MAX_NUM_OF_COMPONENT
+            || len < 7 + num_of_component
+        {
+            return None;
+        }
+        let mut pos = 3usize;
+        let component_tag = p[pos..pos + num_of_component].to_vec();
+        pos += num_of_component;
+
+        // Contract Verification Info
+        let cvi_length = p[pos] as usize;
+        pos += 1;
+        if cvi_length > Self::MAX_VERIFICATION_INFO_LENGTH
+            || len < pos + cvi_length + 1
+        {
+            return None;
+        }
+        let contract_verification_info = p[pos..pos + cvi_length].to_vec();
+        pos += cvi_length;
+
+        // Fee Name
+        let fee_name_length = p[pos] as usize;
+        pos += 1;
+        let fee_name = if fee_name_length > 0 {
+            if len < pos + fee_name_length { return None; }
+            p[pos..pos + fee_name_length].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Some(Self {
+            ca_system_id,
+            ca_unit_id,
+            component_tag,
+            contract_verification_info,
+            fee_name,
+        })
+    }
+}
+
+// ─── CAServiceDescriptor (tag=0xCC) ────────────────────────────
+
+/// CA サービス記述子。Descriptors.cpp:1375。
+#[derive(Clone, Debug, Default)]
+pub struct CaServiceDescriptor {
+    pub ca_system_id: u16,
+    pub ca_broadcaster_group_id: u8,
+    pub message_control: u8,
+    /// service_id のリスト
+    pub service_id_list: Vec<u16>,
+}
+
+impl CaServiceDescriptor {
+    pub const TAG: u8 = 0xCC;
+
+    /// Descriptors.cpp:1375
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 4 { return None; }
+        let p = &desc.payload;
+
+        let ca_system_id = load16(&p[0..2]);
+        let ca_broadcaster_group_id = p[2];
+        let message_control = p[3];
+
+        let service_id_count = (len - 4) / 2;
+        let mut service_id_list = Vec::with_capacity(service_id_count);
+        for i in 0..service_id_count {
+            service_id_list.push(load16(&p[4 + 2 * i..6 + 2 * i]));
+        }
+
+        Some(Self {
+            ca_system_id,
+            ca_broadcaster_group_id,
+            message_control,
+            service_id_list,
+        })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2690,5 +2833,193 @@ mod tests {
             is_valid: true,
         };
         assert!(LocalTimeOffsetDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── CAEMMTSDescriptor (0xCA) ──
+
+    #[test]
+    fn test_ca_emm_ts_descriptor_basic() {
+        let payload = vec![0x00, 0x05, 0x12, 0x34, 0x56, 0x78, 0x0A];
+        let desc = DescriptorBase {
+            tag: 0xCA,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = CaEmmTsDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.ca_system_id, 0x0005);
+        assert_eq!(d.transport_stream_id, 0x1234);
+        assert_eq!(d.original_network_id, 0x5678);
+        assert_eq!(d.power_supply_period, 0x0A);
+    }
+
+    #[test]
+    fn test_ca_emm_ts_descriptor_wrong_length() {
+        // len != 7 は None
+        let payload = vec![0x00, 0x05, 0x12, 0x34, 0x56, 0x78]; // 6
+        let desc = DescriptorBase {
+            tag: 0xCA,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(CaEmmTsDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_ca_emm_ts_descriptor_wrong_tag() {
+        let payload = vec![0u8; 7];
+        let desc = DescriptorBase {
+            tag: 0xCB,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(CaEmmTsDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── CAContractInfoDescriptor (0xCB) ──
+
+    #[test]
+    fn test_ca_contract_info_descriptor_basic() {
+        // ca_system_id=0x0005, p[2]=0x12 -> ca_unit_id=1, num_of_component=2
+        // component_tag=[0xA0,0xA1]
+        // cvi_length=2, cvi=[0xCC,0xDD]
+        // fee_name_length=3, fee_name=[b'A',b'B',b'C']
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&[0x00, 0x05]); // ca_system_id
+        payload.push(0x12);                        // ca_unit_id=1, num_of_component=2
+        payload.extend_from_slice(&[0xA0, 0xA1]);  // component_tag
+        payload.push(0x02);                        // cvi_length
+        payload.extend_from_slice(&[0xCC, 0xDD]);  // cvi
+        payload.push(0x03);                        // fee_name_length
+        payload.extend_from_slice(b"ABC");         // fee_name
+        let desc = DescriptorBase {
+            tag: 0xCB,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = CaContractInfoDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.ca_system_id, 0x0005);
+        assert_eq!(d.ca_unit_id, 1);
+        assert_eq!(d.component_tag, vec![0xA0, 0xA1]);
+        assert_eq!(d.contract_verification_info, vec![0xCC, 0xDD]);
+        assert_eq!(d.fee_name, b"ABC".to_vec());
+    }
+
+    #[test]
+    fn test_ca_contract_info_descriptor_no_fee_name() {
+        // num_of_component=2, cvi_length=2, fee_name_length=0
+        // 原実装は len >= 7+num_of_component(=9) を要求するため cvi に 2 バイト持たせて len=9。
+        // ca_system_id(2)+p2(1)+component_tag(2)+cvi_length(1)+cvi(2)+fee_name_length(1)=9
+        let payload = vec![0x00, 0x05, 0x12, 0xA0, 0xA1, 0x02, 0xCC, 0xDD, 0x00];
+        let desc = DescriptorBase {
+            tag: 0xCB,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = CaContractInfoDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.ca_unit_id, 1);
+        assert_eq!(d.component_tag, vec![0xA0, 0xA1]);
+        assert_eq!(d.contract_verification_info, vec![0xCC, 0xDD]);
+        assert!(d.fee_name.is_empty());
+    }
+
+    #[test]
+    fn test_ca_contract_info_descriptor_zero_ca_unit_id() {
+        // p[2]=0x02 -> ca_unit_id=0 は None
+        let payload = vec![0x00, 0x05, 0x02, 0xA0, 0x00, 0x00, 0x00];
+        let desc = DescriptorBase {
+            tag: 0xCB,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(CaContractInfoDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_ca_contract_info_descriptor_too_short() {
+        let payload = vec![0x00, 0x05, 0x11, 0xA0, 0x00, 0x00]; // len 6 < 7? -> actually need >=7
+        // 上は len=6 < 7 で None になる
+        let desc = DescriptorBase {
+            tag: 0xCB,
+            length: 6,
+            payload: vec![0u8; 6],
+            is_valid: true,
+        };
+        assert!(CaContractInfoDescriptor::from_descriptor(&desc).is_none());
+        let _ = payload;
+    }
+
+    #[test]
+    fn test_ca_contract_info_descriptor_wrong_tag() {
+        let payload = vec![0x00, 0x05, 0x11, 0xA0, 0x00, 0x00, 0x00];
+        let desc = DescriptorBase {
+            tag: 0xCC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(CaContractInfoDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── CAServiceDescriptor (0xCC) ──
+
+    #[test]
+    fn test_ca_service_descriptor_basic() {
+        // ca_system_id=0x0005, group_id=0x01, message_control=0x02, service_ids=[0x1234,0x5678]
+        let payload = vec![0x00, 0x05, 0x01, 0x02, 0x12, 0x34, 0x56, 0x78];
+        let desc = DescriptorBase {
+            tag: 0xCC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = CaServiceDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.ca_system_id, 0x0005);
+        assert_eq!(d.ca_broadcaster_group_id, 0x01);
+        assert_eq!(d.message_control, 0x02);
+        assert_eq!(d.service_id_list, vec![0x1234, 0x5678]);
+    }
+
+    #[test]
+    fn test_ca_service_descriptor_no_service() {
+        // len==4: service_id 無し
+        let payload = vec![0x00, 0x05, 0x01, 0x02];
+        let desc = DescriptorBase {
+            tag: 0xCC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = CaServiceDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.service_id_list.is_empty());
+    }
+
+    #[test]
+    fn test_ca_service_descriptor_too_short() {
+        let payload = vec![0x00, 0x05, 0x01]; // 3 < 4
+        let desc = DescriptorBase {
+            tag: 0xCC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(CaServiceDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_ca_service_descriptor_wrong_tag() {
+        let payload = vec![0x00, 0x05, 0x01, 0x02];
+        let desc = DescriptorBase {
+            tag: 0xCA,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(CaServiceDescriptor::from_descriptor(&desc).is_none());
     }
 }
