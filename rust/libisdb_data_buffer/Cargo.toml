@@ -1,0 +1,10 @@
+[package]
+name = "libisdb_data_buffer"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Base/DataBuffer.cpp: dynamic memory data buffer with capacity/size separation"
+
+[lib]
+name = "libisdb_data_buffer"
+path = "src/lib.rs"
