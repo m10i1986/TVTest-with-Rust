@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 libisdb_ts_tables = { path = "../libisdb_ts_tables" }
 libisdb_descriptor = { path = "../libisdb_descriptor" }
+libisdb_arib_string = { path = "../libisdb_arib_string" }
 
 [dev-dependencies]
 libisdb_ts_packet = { path = "../libisdb_ts_packet" }

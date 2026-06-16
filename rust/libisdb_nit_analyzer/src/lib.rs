@@ -18,7 +18,17 @@ use libisdb_ts_tables::NITTable;
 use libisdb_descriptor::{
     ServiceListDescriptor, TerrestrialDeliverySystemDescriptor, PartialReceptionDescriptor,
     SatelliteDeliverySystemDescriptor, CableDeliverySystemDescriptor,
+    NetworkNameDescriptor, SystemManagementDescriptor, TSInformationDescriptor,
 };
+use libisdb_arib_string::{decode_to_string, DecodeFlags};
+
+/// ARIB 文字列をデコードして String にする。空入力は空文字列。
+fn decode_aribstr(src: &[u8]) -> String {
+    if src.is_empty() {
+        return String::new();
+    }
+    decode_to_string(src, DecodeFlags::default()).unwrap_or_default()
+}
 
 /// NIT のサービスリストエントリ。ServiceListDescriptor::ServiceInfo 相当。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -164,6 +174,53 @@ pub fn build_network_stream_list(nit: &NITTable) -> Vec<NetworkStreamInfo> {
 /// NIT の network_id を返す。
 pub fn network_id(nit: &NITTable) -> u16 {
     nit.get_network_id()
+}
+
+/// ネットワーク情報。AnalyzerFilter.hpp:NITInfo 相当。
+///
+/// network descriptor block の NetworkNameDescriptor(0x40) / SystemManagementDescriptor(0xFE)
+/// と、最初の TS の TSInformationDescriptor(0xCD) から構築する。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct NITInfo {
+    pub broadcasting_flag: u8,
+    pub broadcasting_id: u8,
+    pub remote_control_key_id: u8,
+    pub network_name: String,
+    pub ts_name: String,
+}
+
+/// NITTable からネットワーク情報を構築する。OnNITSection のネットワーク情報取得部分相当。
+///
+/// 原実装では NetworkName / BroadcastingFlag/ID は network descriptor block から、
+/// RemoteControlKeyID / TSName は最初の TS(SectionNo==0, i==0) の TSInformationDescriptor
+/// から取得する。本関数は単一の NITTable を入力とし、その最初の TS を「i==0」とみなす。
+pub fn build_nit_info(nit: &NITTable) -> NITInfo {
+    let mut info = NITInfo::default();
+
+    // network descriptor block から NetworkName / BroadcastingFlag/ID を取得
+    let net_block = nit.get_network_descriptor_block();
+    for desc in net_block.iter() {
+        if let Some(nnd) = NetworkNameDescriptor::from_descriptor(desc) {
+            info.network_name = decode_aribstr(&nnd.network_name);
+        }
+        if let Some(smd) = SystemManagementDescriptor::from_descriptor(desc) {
+            info.broadcasting_flag = smd.broadcasting_flag;
+            info.broadcasting_id = smd.broadcasting_id;
+        }
+    }
+
+    // 最初の TS の TSInformationDescriptor から RemoteControlKeyID / TSName を取得
+    if let Some(ts) = nit.get_ts_info(0) {
+        for desc in ts.descriptors.iter() {
+            if let Some(tsid) = TSInformationDescriptor::from_descriptor(desc) {
+                info.ts_name = decode_aribstr(&tsid.ts_name);
+                info.remote_control_key_id = tsid.remote_control_key_id;
+                break;
+            }
+        }
+    }
+
+    info
 }
 
 #[cfg(test)]
@@ -408,5 +465,130 @@ mod tests {
         assert_eq!(ts.service_list.len(), 3);
         assert!(ts.terrestrial.is_some());
         assert_eq!(ts.partial_reception_service_list, vec![0x0400, 0x0401]);
+    }
+
+    // ── NITInfo (build_nit_info) ──
+
+    /// network_descriptors と TS デスクリプタを指定して NITTable を組み立てる。
+    fn make_nit_table_full(
+        network_id: u16,
+        net_descs: &[u8],
+        ts_id: u16,
+        onid: u16,
+        ts_descs: &[u8],
+    ) -> NITTable {
+        let mut body = Vec::new();
+        // network_descriptors_length(2) + network_descriptors
+        let ndl = net_descs.len();
+        body.push(0xF0 | ((ndl >> 8) as u8 & 0x0F));
+        body.push((ndl & 0xFF) as u8);
+        body.extend_from_slice(net_descs);
+
+        // TS ループ
+        let mut ts_loop = Vec::new();
+        ts_loop.extend_from_slice(&ts_id.to_be_bytes());
+        ts_loop.extend_from_slice(&onid.to_be_bytes());
+        let dll = ts_descs.len();
+        ts_loop.push(0xF0 | ((dll >> 8) as u8 & 0x0F));
+        ts_loop.push((dll & 0xFF) as u8);
+        ts_loop.extend_from_slice(ts_descs);
+        body.push(0xF0 | ((ts_loop.len() >> 8) as u8 & 0x0F));
+        body.push((ts_loop.len() & 0xFF) as u8);
+        body.extend_from_slice(&ts_loop);
+
+        let table_id = 0x40u8;
+        let section_length = 5 + body.len() + 4;
+        let mut sec = Vec::new();
+        sec.push(table_id);
+        sec.push(0xB0 | ((section_length >> 8) as u8));
+        sec.push((section_length & 0xFF) as u8);
+        sec.extend_from_slice(&network_id.to_be_bytes());
+        sec.push(0xC1);
+        sec.push(0x00);
+        sec.push(0x00);
+        sec.extend_from_slice(&body);
+        let crc = crc32_mpeg2_calc(&sec);
+        sec.extend_from_slice(&crc.to_be_bytes());
+
+        let pid = 0x0010u16;
+        let mut data = [0xFFu8; TS_PACKET_SIZE];
+        data[0] = 0x47;
+        data[1] = 0x40 | ((pid >> 8) as u8 & 0x1F);
+        data[2] = (pid & 0xFF) as u8;
+        data[3] = 0x10;
+        data[4] = 0x00;
+        data[5..5 + sec.len()].copy_from_slice(&sec);
+
+        let mut pkt = TsPacket::new(&data);
+        pkt.parse_packet(None);
+
+        let mut table = NITTable::new();
+        table.store_packet(&pkt);
+        table
+    }
+
+    /// NetworkNameDescriptor(0x40) を組み立てる。payload はそのまま network_name。
+    fn build_network_name_desc(payload: &[u8]) -> Vec<u8> {
+        let mut d = vec![0x40, payload.len() as u8];
+        d.extend_from_slice(payload);
+        d
+    }
+
+    /// SystemManagementDescriptor(0xFE) を組み立てる。
+    fn build_system_management_desc(flag: u8, id: u8, additional: u8) -> Vec<u8> {
+        // p[0] = (flag<<6) | (id & 0x3F), p[1] = additional
+        vec![0xFE, 0x02, ((flag & 0x03) << 6) | (id & 0x3F), additional]
+    }
+
+    /// TSInformationDescriptor(0xCD) を組み立てる。
+    fn build_ts_information_desc(rckid: u8, ts_name: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.push(rckid);
+        // ts_name_length(6bit) | transmission_type_count(2bit)=0
+        p.push(((ts_name.len() as u8) << 2) & 0xFC);
+        p.extend_from_slice(ts_name);
+        let mut d = vec![0xCD, p.len() as u8];
+        d.extend_from_slice(&p);
+        d
+    }
+
+    #[test]
+    fn test_build_nit_info_basic() {
+        // ARIB トリック: ESC(0x1B 0x28 0x4A)=G0 Alphanumeric, 'A'(0x41) -> 'Ａ'
+        let aribstr = [0x1B, 0x28, 0x4A, 0x41];
+        let mut net_descs = build_network_name_desc(&aribstr);
+        net_descs.extend_from_slice(&build_system_management_desc(0x01, 0x05, 0x00));
+
+        let ts_descs = build_ts_information_desc(0x07, &aribstr);
+
+        let nit = make_nit_table_full(0x0004, &net_descs, 0x7FE0, 0x0004, &ts_descs);
+        let info = build_nit_info(&nit);
+        assert_eq!(info.broadcasting_flag, 0x01);
+        assert_eq!(info.broadcasting_id, 0x05);
+        assert_eq!(info.remote_control_key_id, 0x07);
+        assert_eq!(info.network_name, "Ａ");
+        assert_eq!(info.ts_name, "Ａ");
+    }
+
+    #[test]
+    fn test_build_nit_info_no_descriptors() {
+        let nit = make_nit_table_full(0x0004, &[], 0x7FE0, 0x0004, &[]);
+        let info = build_nit_info(&nit);
+        assert_eq!(info.broadcasting_flag, 0);
+        assert_eq!(info.broadcasting_id, 0);
+        assert_eq!(info.remote_control_key_id, 0);
+        assert!(info.network_name.is_empty());
+        assert!(info.ts_name.is_empty());
+    }
+
+    #[test]
+    fn test_build_nit_info_only_network_name() {
+        let aribstr = [0x1B, 0x28, 0x4A, 0x41];
+        let net_descs = build_network_name_desc(&aribstr);
+        let nit = make_nit_table_full(0x0004, &net_descs, 0x7FE0, 0x0004, &[]);
+        let info = build_nit_info(&nit);
+        assert_eq!(info.network_name, "Ａ");
+        assert!(info.ts_name.is_empty());
+        assert_eq!(info.remote_control_key_id, 0);
     }
 }

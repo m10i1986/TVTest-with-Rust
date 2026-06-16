@@ -1180,6 +1180,150 @@ impl PartialReceptionDescriptor {
     }
 }
 
+// ─── DigitalCopyControlDescriptor (tag=0xC1) ───────────────────
+
+/// コンポーネント制御情報。Descriptors.hpp:404。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ComponentControlInfo {
+    pub component_tag: u8,
+    pub digital_recording_control_data: u8,
+    pub maximum_bit_rate_flag: bool,
+    pub copy_control_type: u8,
+    /// copy_control_type が 1 または 3 のときのみ有効。
+    pub aps_control_data: u8,
+    /// maximum_bit_rate_flag が立つときのみ有効。
+    pub maximum_bit_rate: u8,
+}
+
+/// デジタルコピー制御記述子。Descriptors.cpp:775 (StoreContents)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DigitalCopyControlDescriptor {
+    pub digital_recording_control_data: u8,
+    pub maximum_bit_rate_flag: bool,
+    pub component_control_flag: bool,
+    pub copy_control_type: u8,
+    /// copy_control_type が 1 または 3 のときのみ有効。
+    pub aps_control_data: u8,
+    /// maximum_bit_rate_flag が立つときのみ有効。
+    pub maximum_bit_rate: u8,
+    pub component_control_list: Vec<ComponentControlInfo>,
+}
+
+impl DigitalCopyControlDescriptor {
+    pub const TAG: u8 = 0xC1;
+
+    /// Descriptors.cpp:775
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let p = &desc.payload;
+
+        let mut d = DigitalCopyControlDescriptor {
+            digital_recording_control_data: p[0] >> 6,
+            maximum_bit_rate_flag: (p[0] & 0x20) != 0,
+            component_control_flag: (p[0] & 0x10) != 0,
+            copy_control_type: (p[0] >> 2) & 0x03,
+            ..Default::default()
+        };
+        if d.copy_control_type == 1 || d.copy_control_type == 3 {
+            d.aps_control_data = p[0] & 0x03;
+        }
+
+        let mut pos = 1usize;
+
+        if d.maximum_bit_rate_flag {
+            if len < 2 { return None; }
+            d.maximum_bit_rate = p[pos];
+            pos += 1;
+        }
+
+        if d.component_control_flag {
+            if pos + 1 > len { return None; }
+            let component_control_length = p[pos] as usize;
+            pos += 1;
+            let end_pos = pos + component_control_length;
+            if end_pos > len { return None; }
+
+            while pos + 2 <= end_pos {
+                let component_tag = p[pos];
+                pos += 1;
+                let mut info = ComponentControlInfo {
+                    component_tag,
+                    digital_recording_control_data: p[pos] >> 6,
+                    maximum_bit_rate_flag: (p[pos] & 0x20) != 0,
+                    copy_control_type: (p[pos] >> 2) & 0x03,
+                    ..Default::default()
+                };
+                if info.copy_control_type == 1 || info.copy_control_type == 3 {
+                    info.aps_control_data = p[pos] & 0x03;
+                }
+                pos += 1;
+                if info.maximum_bit_rate_flag {
+                    if pos >= end_pos { break; }
+                    info.maximum_bit_rate = p[pos];
+                    pos += 1;
+                }
+                d.component_control_list.push(info);
+            }
+        }
+
+        Some(d)
+    }
+}
+
+// ─── VideoDecodeControlDescriptor (tag=0xC8) ───────────────────
+
+/// ビデオデコードコントロール記述子。Descriptors.cpp:1081 (StoreContents)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VideoDecodeControlDescriptor {
+    pub still_picture_flag: bool,
+    pub sequence_end_code_flag: bool,
+    pub video_encode_format: u8,
+}
+
+impl VideoDecodeControlDescriptor {
+    pub const TAG: u8 = 0xC8;
+
+    /// Descriptors.cpp:1081
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        if desc.length != 1 { return None; }
+        let data = desc.payload[0];
+        Some(Self {
+            still_picture_flag: (data & 0x80) != 0,
+            sequence_end_code_flag: (data & 0x40) != 0,
+            video_encode_format: (data >> 2) & 0x0F,
+        })
+    }
+}
+
+// ─── DataComponentDescriptor (tag=0xFD) ────────────────────────
+
+/// データ符号化方式記述子。Descriptors.cpp:2327 (StoreContents)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DataComponentDescriptor {
+    pub data_component_id: u8,
+    /// additional_data_component_info (生バイト列)
+    pub additional_data_component_info: Vec<u8>,
+}
+
+impl DataComponentDescriptor {
+    pub const TAG: u8 = 0xFD;
+
+    /// Descriptors.cpp:2327
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let p = &desc.payload;
+        Some(Self {
+            data_component_id: p[0],
+            additional_data_component_info: p[1..len].to_vec(),
+        })
+    }
+}
+
 // ─── SystemManagementDescriptor (tag=0xFE) ─────────────────────
 
 /// システム管理記述子。Descriptors.cpp:2360。
@@ -1201,6 +1345,109 @@ impl SystemManagementDescriptor {
             broadcasting_flag:          (p[0] & 0xC0) >> 6,
             broadcasting_id:             p[0] & 0x3F,
             additional_broadcasting_id:  p[1],
+        })
+    }
+}
+
+// ─── LinkageDescriptor (tag=0x4A) ──────────────────────────────
+
+/// リンク記述子。Descriptors.cpp:349。
+#[derive(Clone, Debug, Default)]
+pub struct LinkageDescriptor {
+    pub transport_stream_id: u16,
+    pub original_network_id: u16,
+    pub service_id: u16,
+    pub linkage_type: u8,
+    /// private_data_byte (生バイト列)
+    pub private_data: Vec<u8>,
+}
+
+impl LinkageDescriptor {
+    pub const TAG: u8 = 0x4A;
+
+    /// Descriptors.cpp:349
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 7 { return None; }
+        let p = &desc.payload;
+        Some(Self {
+            transport_stream_id: load16(&p[0..2]),
+            original_network_id: load16(&p[2..4]),
+            service_id:          load16(&p[4..6]),
+            linkage_type:        p[6],
+            private_data:        p[7..len].to_vec(),
+        })
+    }
+}
+
+// ─── TSInformationDescriptor (tag=0xCD) ────────────────────────
+
+/// 伝送階層の情報。Descriptors.hpp:799。
+#[derive(Clone, Debug, Default)]
+pub struct TSInformationTransmissionLayerInfo {
+    pub transmission_type_info: u8,
+    /// service_id のリスト
+    pub service_id_list: Vec<u16>,
+}
+
+/// TS情報記述子。Descriptors.cpp:1442。
+#[derive(Clone, Debug, Default)]
+pub struct TSInformationDescriptor {
+    pub remote_control_key_id: u8,
+    /// ts_name_char (ARIB文字列・生バイト列)
+    pub ts_name: Vec<u8>,
+    pub transmission_type_count: u8,
+    /// 伝送階層の情報リスト (原実装は最大3件の固定長配列)
+    pub transmission_info_list: Vec<TSInformationTransmissionLayerInfo>,
+}
+
+impl TSInformationDescriptor {
+    pub const TAG: u8 = 0xCD;
+
+    /// Descriptors.cpp:1442
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 2 { return None; }
+        let p = &desc.payload;
+
+        let remote_control_key_id = p[0];
+
+        let ts_name_length = (p[1] >> 2) as usize;
+        if 2 + ts_name_length > len { return None; }
+        let ts_name = if ts_name_length > 0 {
+            p[2..2 + ts_name_length].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let transmission_type_count = p[1] & 0x03;
+
+        let mut pos = 2 + ts_name_length;
+        let mut transmission_info_list = Vec::with_capacity(transmission_type_count as usize);
+        for _ in 0..transmission_type_count {
+            if pos + 2 > len { return None; }
+            let transmission_type_info = p[pos];
+            let num_of_service = p[pos + 1] as usize;
+            pos += 2;
+            if pos + 2 * num_of_service > len { return None; }
+            let mut service_id_list = Vec::with_capacity(num_of_service);
+            for _ in 0..num_of_service {
+                service_id_list.push(load16(&p[pos..pos + 2]));
+                pos += 2;
+            }
+            transmission_info_list.push(TSInformationTransmissionLayerInfo {
+                transmission_type_info,
+                service_id_list,
+            });
+        }
+
+        Some(Self {
+            remote_control_key_id,
+            ts_name,
+            transmission_type_count,
+            transmission_info_list,
         })
     }
 }
@@ -1915,5 +2162,244 @@ mod tests {
     fn test_si_parameter_descriptor_wrong_tag() {
         let desc = DescriptorBase { tag: 0xD8, length: 3, payload: vec![0x01, 0x02, 0x03], is_valid: true };
         assert!(SIParameterDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── DigitalCopyControlDescriptor ──
+
+    #[test]
+    fn test_digital_copy_control_simple() {
+        // p[0]=0b01_0_0_01_00=0x44:
+        //   digital_recording_control_data=1, max_bitrate_flag=false,
+        //   component_control_flag=false, copy_control_type=1, aps_control_data=0(p[0]&0x03)
+        let desc = DescriptorBase { tag: 0xC1, length: 1, payload: vec![0x44], is_valid: true };
+        let d = DigitalCopyControlDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.digital_recording_control_data, 1);
+        assert!(!d.maximum_bit_rate_flag);
+        assert!(!d.component_control_flag);
+        assert_eq!(d.copy_control_type, 1);
+        assert_eq!(d.aps_control_data, 0);
+        assert!(d.component_control_list.is_empty());
+    }
+
+    #[test]
+    fn test_digital_copy_control_with_maximum_bitrate() {
+        // p[0]=0b00_1_0_00_00=0x20: max_bitrate_flag=true, copy_control_type=0
+        // p[1]=0x55 = maximum_bit_rate
+        let desc = DescriptorBase { tag: 0xC1, length: 2, payload: vec![0x20, 0x55], is_valid: true };
+        let d = DigitalCopyControlDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.maximum_bit_rate_flag);
+        assert_eq!(d.maximum_bit_rate, 0x55);
+    }
+
+    #[test]
+    fn test_digital_copy_control_with_component_control() {
+        // p[0]=0b00_0_1_00_00=0x10: component_control_flag=true
+        // p[1]=component_control_length=3
+        // component[0]: tag=0xAB, p[3]=0b01_1_0_01_00=0x64 (drcd=1,maxflag=true,cct=1,aps=0),
+        //   p[4]=maximum_bit_rate=0x77
+        let payload = vec![0x10, 0x03, 0xAB, 0x64, 0x77];
+        let desc = DescriptorBase { tag: 0xC1, length: payload.len() as u8, payload, is_valid: true };
+        let d = DigitalCopyControlDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.component_control_flag);
+        assert_eq!(d.component_control_list.len(), 1);
+        let c = &d.component_control_list[0];
+        assert_eq!(c.component_tag, 0xAB);
+        assert_eq!(c.digital_recording_control_data, 1);
+        assert!(c.maximum_bit_rate_flag);
+        assert_eq!(c.copy_control_type, 1);
+        assert_eq!(c.maximum_bit_rate, 0x77);
+    }
+
+    #[test]
+    fn test_digital_copy_control_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xC0, length: 1, payload: vec![0x00], is_valid: true };
+        assert!(DigitalCopyControlDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── VideoDecodeControlDescriptor ──
+
+    #[test]
+    fn test_video_decode_control() {
+        // p[0]=0b1_0_0011_00=0x8C: still=true, seq_end=false, video_encode_format=0b0011=3
+        let desc = DescriptorBase { tag: 0xC8, length: 1, payload: vec![0x8C], is_valid: true };
+        let d = VideoDecodeControlDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.still_picture_flag);
+        assert!(!d.sequence_end_code_flag);
+        assert_eq!(d.video_encode_format, 3);
+    }
+
+    #[test]
+    fn test_video_decode_control_bad_length() {
+        let desc = DescriptorBase { tag: 0xC8, length: 2, payload: vec![0x00, 0x00], is_valid: true };
+        assert!(VideoDecodeControlDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── DataComponentDescriptor ──
+
+    #[test]
+    fn test_data_component_descriptor() {
+        // data_component_id=0x08(字幕), additional_info=[0x3D, 0x00]
+        let payload = vec![0x08, 0x3D, 0x00];
+        let desc = DescriptorBase { tag: 0xFD, length: payload.len() as u8, payload, is_valid: true };
+        let d = DataComponentDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.data_component_id, 0x08);
+        assert_eq!(d.additional_data_component_info, vec![0x3D, 0x00]);
+    }
+
+    #[test]
+    fn test_data_component_descriptor_id_only() {
+        let desc = DescriptorBase { tag: 0xFD, length: 1, payload: vec![0x08], is_valid: true };
+        let d = DataComponentDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.data_component_id, 0x08);
+        assert!(d.additional_data_component_info.is_empty());
+    }
+
+    #[test]
+    fn test_data_component_descriptor_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xFE, length: 1, payload: vec![0x08], is_valid: true };
+        assert!(DataComponentDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── LinkageDescriptor (0x4A) ──
+
+    #[test]
+    fn test_linkage_descriptor_basic() {
+        // tsid=0x0102 onid=0x0304 sid=0x0506 linkage_type=0x07 private=[0xAA,0xBB]
+        let payload = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0xAA, 0xBB];
+        let desc = DescriptorBase {
+            tag: 0x4A,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LinkageDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.transport_stream_id, 0x0102);
+        assert_eq!(d.original_network_id, 0x0304);
+        assert_eq!(d.service_id, 0x0506);
+        assert_eq!(d.linkage_type, 0x07);
+        assert_eq!(d.private_data, vec![0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_linkage_descriptor_no_private_data() {
+        let payload = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        let desc = DescriptorBase {
+            tag: 0x4A,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LinkageDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.linkage_type, 0x07);
+        assert!(d.private_data.is_empty());
+    }
+
+    #[test]
+    fn test_linkage_descriptor_too_short() {
+        let payload = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06]; // 6 < 7
+        let desc = DescriptorBase {
+            tag: 0x4A,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(LinkageDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_linkage_descriptor_wrong_tag() {
+        let payload = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        let desc = DescriptorBase {
+            tag: 0x4D,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(LinkageDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── TSInformationDescriptor (0xCD) ──
+
+    #[test]
+    fn test_ts_information_descriptor_basic() {
+        // remote_control_key_id=0x05
+        // ts_name_length=3 ('A','B','C') -> p[1] = (3<<2)|count
+        // transmission_type_count=2
+        // layer0: type_info=0x10, num_service=1, sid=0x1234
+        // layer1: type_info=0x20, num_service=2, sid=0x5678, sid=0x9ABC
+        let p1 = (3u8 << 2) | 2; // ts_name_length=3, count=2
+        let mut payload = vec![0x05, p1, b'A', b'B', b'C'];
+        payload.extend_from_slice(&[0x10, 0x01, 0x12, 0x34]);
+        payload.extend_from_slice(&[0x20, 0x02, 0x56, 0x78, 0x9A, 0xBC]);
+        let desc = DescriptorBase {
+            tag: 0xCD,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = TSInformationDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.remote_control_key_id, 0x05);
+        assert_eq!(d.ts_name, b"ABC".to_vec());
+        assert_eq!(d.transmission_type_count, 2);
+        assert_eq!(d.transmission_info_list.len(), 2);
+        assert_eq!(d.transmission_info_list[0].transmission_type_info, 0x10);
+        assert_eq!(d.transmission_info_list[0].service_id_list, vec![0x1234]);
+        assert_eq!(d.transmission_info_list[1].transmission_type_info, 0x20);
+        assert_eq!(d.transmission_info_list[1].service_id_list, vec![0x5678, 0x9ABC]);
+    }
+
+    #[test]
+    fn test_ts_information_descriptor_no_name_no_layer() {
+        // ts_name_length=0, count=0
+        let payload = vec![0x07, 0x00];
+        let desc = DescriptorBase {
+            tag: 0xCD,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = TSInformationDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.remote_control_key_id, 0x07);
+        assert!(d.ts_name.is_empty());
+        assert_eq!(d.transmission_type_count, 0);
+        assert!(d.transmission_info_list.is_empty());
+    }
+
+    #[test]
+    fn test_ts_information_descriptor_too_short() {
+        let payload = vec![0x05]; // len 1 < 2
+        let desc = DescriptorBase {
+            tag: 0xCD,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(TSInformationDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_ts_information_descriptor_truncated_name() {
+        // ts_name_length=3 だが本体に名前バイトが足りない
+        let p1 = 3u8 << 2;
+        let payload = vec![0x05, p1, b'A']; // 2 + 3 > len(3)
+        let desc = DescriptorBase {
+            tag: 0xCD,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(TSInformationDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_ts_information_descriptor_wrong_tag() {
+        let payload = vec![0x05, 0x00];
+        let desc = DescriptorBase {
+            tag: 0xCE,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(TSInformationDescriptor::from_descriptor(&desc).is_none());
     }
 }
