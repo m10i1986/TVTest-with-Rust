@@ -22,7 +22,7 @@
 //
 // ARIBString は Vec<u8>(生バイト列)として保持する。
 
-use libisdb_datetime::{mjd_to_datetime, DateTime};
+use libisdb_datetime::{mjd_to_datetime, mjd_bcd_to_datetime, bcd_time_hm_to_minute, DateTime};
 
 pub const PID_INVALID: u16 = 0x1FFF;
 pub const LANGUAGE_CODE_INVALID: u32 = 0;
@@ -1514,6 +1514,65 @@ impl EmergencyInformationDescriptor {
     }
 }
 
+// ─── LocalTimeOffsetDescriptor (tag=0x58) ──────────────────────
+
+/// ローカル時間オフセットの情報。Descriptors.hpp:356。
+#[derive(Clone, Debug, Default)]
+pub struct LocalTimeOffsetInfo {
+    pub country_code: u32,
+    pub country_region_id: u8,
+    pub local_time_offset_polarity: bool,
+    /// local_time_offset (分単位)
+    pub local_time_offset: u16,
+    pub time_of_change: DateTime,
+    /// next_time_offset (分単位)
+    pub next_time_offset: u16,
+}
+
+/// ローカル時間オフセット記述子。Descriptors.cpp:677。
+#[derive(Clone, Debug, Default)]
+pub struct LocalTimeOffsetDescriptor {
+    pub time_offset_list: Vec<LocalTimeOffsetInfo>,
+}
+
+impl LocalTimeOffsetDescriptor {
+    pub const TAG: u8 = 0x58;
+    pub const COUNTRY_CODE_JPN: u32 = 0x4A_50_4E;
+    pub const COUNTRY_REGION_ALL: u8 = 0x00;
+
+    /// Descriptors.cpp:677
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 13 { return None; }
+        let p = &desc.payload;
+
+        let count = len / 13;
+        let mut time_offset_list = Vec::with_capacity(count);
+        let mut pos = 0usize;
+        for _ in 0..count {
+            let country_code = load24(&p[pos..pos + 3]);
+            let country_region_id = (p[pos + 3] & 0xFC) >> 2;
+            let local_time_offset_polarity = (p[pos + 3] & 0x01) != 0;
+            let local_time_offset = bcd_time_hm_to_minute(load16(&p[pos + 4..pos + 6]));
+            let time_of_change = mjd_bcd_to_datetime(&p[pos + 6..pos + 11]).unwrap_or_default();
+            let next_time_offset = bcd_time_hm_to_minute(load16(&p[pos + 11..pos + 13]));
+
+            time_offset_list.push(LocalTimeOffsetInfo {
+                country_code,
+                country_region_id,
+                local_time_offset_polarity,
+                local_time_offset,
+                time_of_change,
+                next_time_offset,
+            });
+            pos += 13;
+        }
+
+        Some(Self { time_offset_list })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2545,5 +2604,91 @@ mod tests {
             is_valid: true,
         };
         assert!(EmergencyInformationDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── LocalTimeOffsetDescriptor (0x58) ──
+
+    #[test]
+    fn test_local_time_offset_descriptor_basic() {
+        // country_code = "JPN" = 0x4A504E
+        // p[3]=0x05: country_region_id=(0x05&0xFC)>>2=1, polarity=(0x05&0x01)=1
+        // local_time_offset = BCD 0x0900 -> 9時00分 = 540分
+        // time_of_change: MJD(2byte)+BCD時刻(3byte) を mjd_bcd_to_datetime で検証
+        // next_time_offset = BCD 0x0000 -> 0分
+        let mjd_bytes: [u8; 2] = [0xE2, 0xC0];
+        let bcd_time: [u8; 3] = [0x01, 0x02, 0x03]; // 01:02:03
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&[0x4A, 0x50, 0x4E]); // country_code
+        payload.push(0x05); // region_id=1, polarity=1
+        payload.extend_from_slice(&[0x09, 0x00]); // local_time_offset BCD 09:00
+        payload.extend_from_slice(&mjd_bytes);     // time_of_change MJD
+        payload.extend_from_slice(&bcd_time);      // time_of_change BCD
+        payload.extend_from_slice(&[0x00, 0x00]);  // next_time_offset BCD 00:00
+
+        let desc = DescriptorBase {
+            tag: 0x58,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LocalTimeOffsetDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.time_offset_list.len(), 1);
+        let info = &d.time_offset_list[0];
+        assert_eq!(info.country_code, 0x4A_50_4E);
+        assert_eq!(info.country_code, LocalTimeOffsetDescriptor::COUNTRY_CODE_JPN);
+        assert_eq!(info.country_region_id, 1);
+        assert!(info.local_time_offset_polarity);
+        assert_eq!(info.local_time_offset, 540); // 09:00 = 540分
+        assert_eq!(info.next_time_offset, 0);
+
+        // time_of_change は datetime クレートの結果と一致するはず
+        let mut tc_bytes = Vec::new();
+        tc_bytes.extend_from_slice(&mjd_bytes);
+        tc_bytes.extend_from_slice(&bcd_time);
+        let expected = mjd_bcd_to_datetime(&tc_bytes).unwrap();
+        assert_eq!(info.time_of_change, expected);
+    }
+
+    #[test]
+    fn test_local_time_offset_descriptor_multiple() {
+        // 13バイト × 2 件
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&[0x4A, 0x50, 0x4E, 0x05, 0x09, 0x00, 0xE2, 0xC0, 0x01, 0x02, 0x03, 0x00, 0x00]);
+        let mut payload = entry.clone();
+        payload.extend_from_slice(&entry);
+        let desc = DescriptorBase {
+            tag: 0x58,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LocalTimeOffsetDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.time_offset_list.len(), 2);
+        assert_eq!(d.time_offset_list[0].country_region_id, 1);
+        assert_eq!(d.time_offset_list[1].country_region_id, 1);
+    }
+
+    #[test]
+    fn test_local_time_offset_descriptor_too_short() {
+        let payload = vec![0u8; 12]; // 12 < 13
+        let desc = DescriptorBase {
+            tag: 0x58,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(LocalTimeOffsetDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_local_time_offset_descriptor_wrong_tag() {
+        let payload = vec![0u8; 13];
+        let desc = DescriptorBase {
+            tag: 0x59,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(LocalTimeOffsetDescriptor::from_descriptor(&desc).is_none());
     }
 }
