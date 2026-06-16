@@ -31,4 +31,5 @@ members = [
     "libisdb_eit_analyzer",
     "libisdb_nit_analyzer",
     "libisdb_bit_analyzer",
+    "libisdb_sdt_analyzer",
 ]
