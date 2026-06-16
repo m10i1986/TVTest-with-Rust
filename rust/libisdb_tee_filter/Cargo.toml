@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_tee_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Filters/TeeFilter.cpp: 2-way tee (broadcast) filter"
+
+[lib]
+name = "libisdb_tee_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
