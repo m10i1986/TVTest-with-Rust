@@ -1,0 +1,12 @@
+[package]
+name = "libisdb_filter_base"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Filters/FilterBase.cpp + Base/DataStream.hpp: filter graph base types"
+
+[lib]
+name = "libisdb_filter_base"
+path = "src/lib.rs"
+
+[dependencies]
