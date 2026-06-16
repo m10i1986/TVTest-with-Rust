@@ -1760,6 +1760,53 @@ impl TargetRegionDescriptor {
     }
 }
 
+// ─── AccessControlDescriptor (tag=0xF6) ────────────────────────
+
+/// アクセス制御記述子。Descriptors.cpp:2128 (StoreContents)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccessControlDescriptor {
+    pub ca_system_id: u16,
+    /// transmission_type (上位3bit)
+    pub transmission_type: u8,
+    /// PID (13bit)
+    pub pid: u16,
+    /// private_data_byte (残りバイト)
+    pub private_data: Vec<u8>,
+}
+
+impl Default for AccessControlDescriptor {
+    fn default() -> Self {
+        Self {
+            ca_system_id: 0,
+            transmission_type: 0,
+            pid: Self::PID_INVALID,
+            private_data: Vec::new(),
+        }
+    }
+}
+
+impl AccessControlDescriptor {
+    pub const TAG: u8 = 0xF6;
+
+    /// PID_INVALID (LibISDBConsts.hpp:65)
+    pub const PID_INVALID: u16 = 0xFFFF;
+
+    /// Descriptors.cpp:2128
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 4 { return None; }
+        let p = &desc.payload;
+
+        Some(Self {
+            ca_system_id: load16(&p[0..2]),
+            transmission_type: p[2] >> 5,
+            pid: load16(&p[2..4]) & 0x1FFF,
+            private_data: p[4..len].to_vec(),
+        })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -3137,5 +3184,73 @@ mod tests {
             is_valid: true,
         };
         assert!(TargetRegionDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── AccessControlDescriptor ──
+    #[test]
+    fn test_access_control_descriptor_basic() {
+        // ca_system_id=0x0005, transmission_type=0b101(=5), pid=0x0123, private=[0xAA,0xBB]
+        // p[2..4]: transmission_type(上位3bit)=0b101, pid(13bit)=0x0123
+        //   0x0123 = 0b0_0001_0010_0011 → 上位3bit付与: (5<<13)|0x0123 = 0xA123
+        let payload = vec![0x00, 0x05, 0xA1, 0x23, 0xAA, 0xBB];
+        let desc = DescriptorBase {
+            tag: 0xF6,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = AccessControlDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.ca_system_id, 0x0005);
+        assert_eq!(d.transmission_type, 5);
+        assert_eq!(d.pid, 0x0123);
+        assert_eq!(d.private_data, vec![0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_access_control_descriptor_no_private() {
+        // len==4: private_data 無し
+        let payload = vec![0x00, 0x05, 0x01, 0x23];
+        let desc = DescriptorBase {
+            tag: 0xF6,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = AccessControlDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.ca_system_id, 0x0005);
+        assert_eq!(d.transmission_type, 0); // 0x01 >> 5 == 0
+        assert_eq!(d.pid, 0x0123);
+        assert!(d.private_data.is_empty());
+    }
+
+    #[test]
+    fn test_access_control_descriptor_too_short() {
+        let payload = vec![0x00, 0x05, 0x01]; // 3 < 4
+        let desc = DescriptorBase {
+            tag: 0xF6,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(AccessControlDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_access_control_descriptor_default_pid_invalid() {
+        // Default では pid==PID_INVALID
+        let d = AccessControlDescriptor::default();
+        assert_eq!(d.pid, AccessControlDescriptor::PID_INVALID);
+    }
+
+    #[test]
+    fn test_access_control_descriptor_wrong_tag() {
+        let payload = vec![0x00, 0x05, 0xA1, 0x23];
+        let desc = DescriptorBase {
+            tag: 0xF5,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(AccessControlDescriptor::from_descriptor(&desc).is_none());
     }
 }
