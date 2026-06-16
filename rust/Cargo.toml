@@ -37,4 +37,5 @@ members = [
     "libisdb_data_storage",
     "libisdb_stream_buffer",
     "libisdb_epg_database",
+    "libisdb_data_streamer",
 ]

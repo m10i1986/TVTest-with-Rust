@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_data_streamer"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Base/DataStreamer.cpp + StreamBufferDataStreamer.cpp + StreamingThread.cpp"
+
+[lib]
+name = "libisdb_data_streamer"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_stream_buffer = { path = "../libisdb_stream_buffer" }
