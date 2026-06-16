@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_ts_download"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/TS/TSDownload.cpp: DSM-CC data download (DataModule / DII / DDB parsers)"
+
+[lib]
+name = "libisdb_ts_download"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_utilities = { path = "../libisdb_utilities" }
