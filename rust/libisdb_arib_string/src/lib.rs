@@ -101,6 +101,9 @@ fn utf8_to_codepoint(data: &[u8]) -> (u32, usize) {
 }
 
 // ARIBString.cpp:416 — CodeSet enumeration
+// 原実装(C++)の列挙子名(Mosaic_A / DRCS_0 等)へ忠実に対応させるため、
+// Rust の UpperCamelCase 規約に対する警告を意図的に抑止する。
+#[allow(non_camel_case_types)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum CodeSet {
