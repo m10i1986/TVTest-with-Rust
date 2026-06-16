@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_stream_buffer"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Base/StreamBuffer.cpp: thread-safe ring-queue stream buffer with pluggable DataStorage backend"
+
+[lib]
+name = "libisdb_stream_buffer"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_data_storage = { path = "../libisdb_data_storage" }

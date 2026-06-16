@@ -28,7 +28,7 @@ pub type SizeType = u64;
 
 /// データストレージ基底トレイト。
 /// デフォルト実装 (is_allocated / is_full / is_end) は原実装の DataStorage.cpp:36-51 に対応。
-pub trait DataStorage {
+pub trait DataStorage: Send {
     fn allocate(&mut self, size: SizeType) -> bool;
     fn free(&mut self);
     fn get_capacity(&self) -> SizeType;
@@ -153,7 +153,7 @@ impl DataStorage for MemoryDataStorage {
 // DataStorageManager trait (DataStorageManager.hpp:38)
 // ---------------------------------------------------------------------------
 
-pub trait DataStorageManager {
+pub trait DataStorageManager: Send {
     fn create_data_storage(&self) -> Box<dyn DataStorage>;
 }
 

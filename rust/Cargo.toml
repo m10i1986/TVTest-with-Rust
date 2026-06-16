@@ -35,4 +35,5 @@ members = [
     "libisdb_ts_download",
     "libisdb_data_buffer",
     "libisdb_data_storage",
+    "libisdb_stream_buffer",
 ]
