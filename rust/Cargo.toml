@@ -34,4 +34,5 @@ members = [
     "libisdb_sdt_analyzer",
     "libisdb_ts_download",
     "libisdb_data_buffer",
+    "libisdb_data_storage",
 ]

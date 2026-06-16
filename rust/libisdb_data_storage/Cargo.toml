@@ -1,0 +1,10 @@
+[package]
+name = "libisdb_data_storage"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Base/DataStorage.cpp + DataStorageManager.cpp: data storage abstraction with memory backend"
+
+[lib]
+name = "libisdb_data_storage"
+path = "src/lib.rs"
