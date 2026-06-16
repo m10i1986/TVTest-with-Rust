@@ -1807,6 +1807,81 @@ impl AccessControlDescriptor {
     }
 }
 
+// ─── LDTLinkageDescriptor (tag=0xDC) ───────────────────────────
+
+/// LDT(リンクド・ディスクリプション・テーブル) リンク記述子の各説明情報。
+/// Descriptors.hpp:1155 (DescriptionInfo)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LDTLinkageDescriptionInfo {
+    pub description_id: u16,
+    /// description_type (下位4bit)
+    pub description_type: u8,
+}
+
+/// LDTリンク記述子。Descriptors.cpp:2085 (StoreContents)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LDTLinkageDescriptor {
+    pub original_service_id: u16,
+    pub transport_stream_id: u16,
+    pub original_network_id: u16,
+    pub description_list: Vec<LDTLinkageDescriptionInfo>,
+}
+
+impl Default for LDTLinkageDescriptor {
+    fn default() -> Self {
+        Self {
+            // 原実装 Reset: SERVICE_ID_INVALID / TRANSPORT_STREAM_ID_INVALID /
+            // NETWORK_ID_INVALID は LibISDBConsts.hpp:37-39 でいずれも 0x0000。
+            original_service_id: Self::SERVICE_ID_INVALID,
+            transport_stream_id: Self::TRANSPORT_STREAM_ID_INVALID,
+            original_network_id: Self::NETWORK_ID_INVALID,
+            description_list: Vec::new(),
+        }
+    }
+}
+
+impl LDTLinkageDescriptor {
+    pub const TAG: u8 = 0xDC;
+
+    /// LibISDBConsts.hpp:39
+    pub const SERVICE_ID_INVALID: u16 = 0x0000;
+    /// LibISDBConsts.hpp:37
+    pub const TRANSPORT_STREAM_ID_INVALID: u16 = 0x0000;
+    /// LibISDBConsts.hpp:38
+    pub const NETWORK_ID_INVALID: u16 = 0x0000;
+
+    /// Descriptors.cpp:2085
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 6 { return None; }
+        let p = &desc.payload;
+
+        let original_service_id = load16(&p[0..2]);
+        let transport_stream_id = load16(&p[2..4]);
+        let original_network_id = load16(&p[4..6]);
+
+        // 原実装: m_DescriptionList.resize((m_Length - 6) / 4)、各4バイト
+        let count = (len - 6) / 4;
+        let mut description_list = Vec::with_capacity(count);
+        let mut pos = 6;
+        for _ in 0..count {
+            description_list.push(LDTLinkageDescriptionInfo {
+                description_id: load16(&p[pos..pos + 2]),
+                description_type: p[pos + 2] & 0x0F,
+            });
+            pos += 4;
+        }
+
+        Some(Self {
+            original_service_id,
+            transport_stream_id,
+            original_network_id,
+            description_list,
+        })
+    }
+}
+
 // ─── tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -3252,5 +3327,101 @@ mod tests {
             is_valid: true,
         };
         assert!(AccessControlDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── LDTLinkageDescriptor ──
+    #[test]
+    fn test_ldt_linkage_descriptor_basic() {
+        // original_service_id=0x1111, transport_stream_id=0x2222,
+        // original_network_id=0x3333, description 2件:
+        //   #0 description_id=0x0101, description_type=0x05 (p[2]=0x?5; 上位4bitは予約)
+        //   #1 description_id=0x0202, description_type=0x0A
+        let payload = vec![
+            0x11, 0x11, 0x22, 0x22, 0x33, 0x33, // header 6 bytes
+            0x01, 0x01, 0xF5, 0x00, // #0: id=0x0101, type=0x05 (0xF5 & 0x0F)
+            0x02, 0x02, 0x0A, 0x00, // #1: id=0x0202, type=0x0A
+        ];
+        let desc = DescriptorBase {
+            tag: 0xDC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LDTLinkageDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.original_service_id, 0x1111);
+        assert_eq!(d.transport_stream_id, 0x2222);
+        assert_eq!(d.original_network_id, 0x3333);
+        assert_eq!(d.description_list.len(), 2);
+        assert_eq!(d.description_list[0].description_id, 0x0101);
+        assert_eq!(d.description_list[0].description_type, 0x05);
+        assert_eq!(d.description_list[1].description_id, 0x0202);
+        assert_eq!(d.description_list[1].description_type, 0x0A);
+    }
+
+    #[test]
+    fn test_ldt_linkage_descriptor_no_description() {
+        // len==6: description 無し
+        let payload = vec![0x11, 0x11, 0x22, 0x22, 0x33, 0x33];
+        let desc = DescriptorBase {
+            tag: 0xDC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LDTLinkageDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.original_service_id, 0x1111);
+        assert!(d.description_list.is_empty());
+    }
+
+    #[test]
+    fn test_ldt_linkage_descriptor_partial_entry_ignored() {
+        // 6 + 6バイト → (12-6)/4 = 1件(整数除算で余り2は無視)
+        let payload = vec![
+            0x11, 0x11, 0x22, 0x22, 0x33, 0x33, // header
+            0x01, 0x01, 0x05, 0x00, // #0 (4 bytes)
+            0xAA, 0xBB, // 余り2バイト → 無視
+        ];
+        let desc = DescriptorBase {
+            tag: 0xDC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = LDTLinkageDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.description_list.len(), 1);
+        assert_eq!(d.description_list[0].description_id, 0x0101);
+    }
+
+    #[test]
+    fn test_ldt_linkage_descriptor_too_short() {
+        let payload = vec![0x11, 0x11, 0x22, 0x22, 0x33]; // 5 < 6
+        let desc = DescriptorBase {
+            tag: 0xDC,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(LDTLinkageDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_ldt_linkage_descriptor_default_invalid() {
+        let d = LDTLinkageDescriptor::default();
+        assert_eq!(d.original_service_id, 0x0000);
+        assert_eq!(d.transport_stream_id, 0x0000);
+        assert_eq!(d.original_network_id, 0x0000);
+        assert!(d.description_list.is_empty());
+    }
+
+    #[test]
+    fn test_ldt_linkage_descriptor_wrong_tag() {
+        let payload = vec![0x11, 0x11, 0x22, 0x22, 0x33, 0x33];
+        let desc = DescriptorBase {
+            tag: 0xDB,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(LDTLinkageDescriptor::from_descriptor(&desc).is_none());
     }
 }
