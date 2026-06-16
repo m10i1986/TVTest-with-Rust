@@ -702,6 +702,9 @@ impl EITTable {
         true
     }
 
+    pub fn get_table_id(&self) -> u8 { self.inner.get_section().get_table_id() }
+    pub fn get_version_number(&self) -> u8 { self.inner.get_section().get_version_number() }
+    pub fn get_section_number(&self) -> u8 { self.inner.get_section().get_section_number() }
     pub fn get_service_id(&self) -> u16 { self.service_id }
     pub fn get_transport_stream_id(&self) -> u16 { self.transport_stream_id }
     pub fn get_original_network_id(&self) -> u16 { self.original_network_id }
