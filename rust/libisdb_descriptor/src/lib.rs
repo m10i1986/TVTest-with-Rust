@@ -765,6 +765,302 @@ pub struct ComponentGroupInfo {
     pub text: Vec<u8>,
 }
 
+// ─── BroadcasterNameDescriptor (tag=0xD8) ──────────────────────
+
+/// ブロードキャスタ名記述子。Descriptors.cpp:1937 (StoreContents)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BroadcasterNameDescriptor {
+    /// broadcaster_name (ARIB 生バイト列)
+    pub broadcaster_name: Vec<u8>,
+}
+
+impl BroadcasterNameDescriptor {
+    pub const TAG: u8 = 0xD8;
+
+    /// Descriptors.cpp:1937
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        // 元実装は m_Length > 0 のとき payload を name に格納、それ以外は空。
+        let broadcaster_name = if len > 0 {
+            desc.payload[..len].to_vec()
+        } else {
+            Vec::new()
+        };
+        Some(Self { broadcaster_name })
+    }
+}
+
+// ─── ExtendedBroadcasterDescriptor (tag=0xCE) ──────────────────
+
+/// 地上デジタルテレビジョン放送ブロードキャスタの情報。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerrestrialBroadcasterInfo {
+    pub terrestrial_broadcaster_id: u16,
+    pub affiliation_id_list: Vec<u8>,
+    pub broadcaster_id_list: Vec<BroadcasterIdEntry>,
+}
+
+/// broadcaster_id ループの 1 要素。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BroadcasterIdEntry {
+    pub original_network_id: u16,
+    pub broadcaster_id: u8,
+}
+
+/// 拡張ブロードキャスタ記述子。Descriptors.cpp:1511 (StoreContents)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtendedBroadcasterDescriptor {
+    pub broadcaster_type: u8,
+    /// broadcaster_type が地上(0x01)/地上音声(0x02)のときのみ Some。
+    pub terrestrial: Option<TerrestrialBroadcasterInfo>,
+}
+
+impl ExtendedBroadcasterDescriptor {
+    pub const TAG: u8 = 0xCE;
+    pub const BROADCASTER_TYPE_TERRESTRIAL: u8 = 0x01;
+    pub const BROADCASTER_TYPE_TERRESTRIAL_SOUND: u8 = 0x02;
+
+    /// Descriptors.cpp:1511
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 1 { return None; }
+        let p = &desc.payload;
+
+        let broadcaster_type = p[0] >> 4;
+
+        let mut terrestrial = None;
+        if broadcaster_type == Self::BROADCASTER_TYPE_TERRESTRIAL
+            || broadcaster_type == Self::BROADCASTER_TYPE_TERRESTRIAL_SOUND
+        {
+            if len < 4 { return None; }
+
+            let terrestrial_broadcaster_id = load16(&p[1..3]);
+            let num_of_affiliation_id = (p[3] >> 4) as usize;
+            let num_of_broadcaster_id = (p[3] & 0x0F) as usize;
+
+            if len < 4 + num_of_affiliation_id + num_of_broadcaster_id * 3 {
+                return None;
+            }
+
+            let affiliation_id_list = p[4..4 + num_of_affiliation_id].to_vec();
+
+            let mut pos = 4 + num_of_affiliation_id;
+            let mut broadcaster_id_list = Vec::with_capacity(num_of_broadcaster_id);
+            for _ in 0..num_of_broadcaster_id {
+                broadcaster_id_list.push(BroadcasterIdEntry {
+                    original_network_id: load16(&p[pos..pos + 2]),
+                    broadcaster_id: p[pos + 2],
+                });
+                pos += 3;
+            }
+
+            terrestrial = Some(TerrestrialBroadcasterInfo {
+                terrestrial_broadcaster_id,
+                affiliation_id_list,
+                broadcaster_id_list,
+            });
+        }
+
+        Some(Self { broadcaster_type, terrestrial })
+    }
+}
+
+// ─── SIParameterDescriptor (tag=0xD7) ──────────────────────────
+
+/// SI 伝送パラメータ記述子の各テーブルごとの情報。Descriptors.hpp:1003。
+///
+/// 元実装は union で表現していたが、Rust では table_id ごとの enum で表す。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SIParameterTableInfo {
+    /// NIT / SDT / BIT / NBIT (table_cycle 8bit)
+    Nit { table_cycle: u8 },
+    /// SDTT / LDT / CDT (table_cycle 16bit)
+    Ldt { table_cycle: u16 },
+    /// EIT[p/f other] など (table_cycle 8bit)
+    EitPf { table_cycle: u8 },
+    /// 地上 H-EIT[p/f], M-EIT, L-EIT
+    Hmleit {
+        heit_table_cycle: u8,
+        meit_table_cycle: u8,
+        leit_table_cycle: u8,
+        num_of_meit_event: u8,
+        num_of_leit_event: u8,
+    },
+    /// EIT[schedule]
+    EitSchedule {
+        media_type_list: Vec<SIParameterEitScheduleMediaType>,
+    },
+}
+
+/// EIT[schedule] の media_type ごとの情報。Descriptors.hpp:1060。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SIParameterEitScheduleMediaType {
+    pub media_type: u8,
+    pub pattern: u8,
+    pub eit_other_flag: bool,
+    pub schedule_range: u8,
+    pub base_cycle: u16,
+    pub cycle_group: Vec<SIParameterEitScheduleCycleGroup>,
+}
+
+/// EIT[schedule] の cycle_group。Descriptors.hpp:1067。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SIParameterEitScheduleCycleGroup {
+    pub num_of_segment: u8,
+    pub cycle: u8,
+}
+
+/// SI 伝送パラメータ記述子の 1 テーブルエントリ (table_id + 詳細)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SIParameterTableEntry {
+    pub table_id: u8,
+    pub info: SIParameterTableInfo,
+}
+
+/// SI 伝送パラメータ記述子。Descriptors.cpp:1804 (StoreContents)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SIParameterDescriptor {
+    pub parameter_version: u8,
+    /// update_time (MJD; 元実装は時刻ゼロの日付のみ)
+    pub update_time: libisdb_datetime::DateTime,
+    pub table_list: Vec<SIParameterTableEntry>,
+}
+
+impl SIParameterDescriptor {
+    pub const TAG: u8 = 0xD7;
+
+    pub const TABLE_ID_NIT: u8 = 0x40;
+    pub const TABLE_ID_SDT_ACTUAL: u8 = 0x42;
+    pub const TABLE_ID_SDT_OTHER: u8 = 0x46;
+    pub const TABLE_ID_EIT_PF_ACTUAL: u8 = 0x4E;
+    pub const TABLE_ID_EIT_PF_OTHER: u8 = 0x4F;
+    pub const TABLE_ID_EIT_SCHEDULE_ACTUAL: u8 = 0x50;
+    pub const TABLE_ID_EIT_SCHEDULE_EXTENDED: u8 = 0x58;
+    pub const TABLE_ID_EIT_SCHEDULE_OTHER: u8 = 0x60;
+    pub const TABLE_ID_SDTT: u8 = 0xC3;
+    pub const TABLE_ID_BIT: u8 = 0xC4;
+    pub const TABLE_ID_NBIT_MSG: u8 = 0xC5;
+    pub const TABLE_ID_NBIT_REF: u8 = 0xC6;
+    pub const TABLE_ID_LDT: u8 = 0xC7;
+    pub const TABLE_ID_CDT: u8 = 0xC8;
+
+    /// Descriptors.cpp:1804
+    pub fn from_descriptor(desc: &DescriptorBase) -> Option<Self> {
+        if desc.tag != Self::TAG { return None; }
+        let len = desc.length as usize;
+        if len < 3 { return None; }
+        let p = &desc.payload;
+
+        let parameter_version = p[0];
+        let update_time = libisdb_datetime::mjd_to_datetime(load16(&p[1..3]));
+
+        let mut table_list = Vec::new();
+
+        let mut pos = 3usize;
+        while pos + 3 <= len {
+            let table_id = p[pos];
+            let description_length = p[pos + 1] as usize;
+            pos += 2;
+            if pos + description_length > len { break; }
+
+            let info: Option<SIParameterTableInfo> = match table_id {
+                Self::TABLE_ID_NIT
+                | Self::TABLE_ID_SDT_ACTUAL
+                | Self::TABLE_ID_SDT_OTHER
+                | Self::TABLE_ID_BIT
+                | Self::TABLE_ID_NBIT_MSG
+                | Self::TABLE_ID_NBIT_REF => {
+                    if description_length == 1 {
+                        Some(SIParameterTableInfo::Nit {
+                            table_cycle: Self::bcd8(&p[pos..]),
+                        })
+                    } else {
+                        None
+                    }
+                }
+                Self::TABLE_ID_SDTT | Self::TABLE_ID_LDT | Self::TABLE_ID_CDT => {
+                    if description_length == 2 {
+                        Some(SIParameterTableInfo::Ldt {
+                            table_cycle: SatelliteDeliverySystemDescriptor::get_bcd(&p[pos..], 4) as u16,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                Self::TABLE_ID_EIT_PF_ACTUAL if description_length == 4 => {
+                    // Terrestrial (H-EIT[p/f], M-EIT, L-EIT)
+                    Some(SIParameterTableInfo::Hmleit {
+                        heit_table_cycle: Self::bcd8(&p[pos..]),
+                        meit_table_cycle: Self::bcd8(&p[pos + 1..]),
+                        leit_table_cycle: Self::bcd8(&p[pos + 2..]),
+                        num_of_meit_event: p[pos + 3] >> 4,
+                        num_of_leit_event: p[pos + 3] & 0x0F,
+                    })
+                }
+                Self::TABLE_ID_EIT_PF_ACTUAL | Self::TABLE_ID_EIT_PF_OTHER => {
+                    // description_length == 4 の EIT_PF_ACTUAL は上で処理済み。
+                    if description_length == 1 {
+                        Some(SIParameterTableInfo::EitPf {
+                            table_cycle: Self::bcd8(&p[pos..]),
+                        })
+                    } else {
+                        None
+                    }
+                }
+                Self::TABLE_ID_EIT_SCHEDULE_ACTUAL
+                | Self::TABLE_ID_EIT_SCHEDULE_EXTENDED
+                | Self::TABLE_ID_EIT_SCHEDULE_OTHER => {
+                    if description_length >= 4 {
+                        let end_pos = pos + description_length;
+                        let mut media_type_list = Vec::new();
+                        let mut q = pos;
+                        while q + 4 <= end_pos {
+                            let cycle_group_count = (p[q + 3] & 0x03) as usize;
+                            let mut media = SIParameterEitScheduleMediaType {
+                                media_type: p[q] >> 6,
+                                pattern: (p[q] >> 4) & 0x03,
+                                eit_other_flag: (p[q] & 0x08) != 0,
+                                schedule_range: Self::bcd8(&p[q + 1..]),
+                                base_cycle: SatelliteDeliverySystemDescriptor::get_bcd(&p[q + 2..], 3) as u16,
+                                cycle_group: Vec::with_capacity(cycle_group_count),
+                            };
+                            q += 4;
+                            if q + cycle_group_count * 2 > end_pos { break; }
+                            for _ in 0..cycle_group_count {
+                                media.cycle_group.push(SIParameterEitScheduleCycleGroup {
+                                    num_of_segment: Self::bcd8(&p[q..]),
+                                    cycle: Self::bcd8(&p[q + 1..]),
+                                });
+                                q += 2;
+                            }
+                            media_type_list.push(media);
+                        }
+                        Some(SIParameterTableInfo::EitSchedule { media_type_list })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(info) = info {
+                table_list.push(SIParameterTableEntry { table_id, info });
+            }
+
+            pos += description_length;
+        }
+
+        Some(Self { parameter_version, update_time, table_list })
+    }
+
+    /// 1 バイト = BCD 2 桁を数値に変換 (GetBCD(uint8_t) 相当)。
+    fn bcd8(p: &[u8]) -> u8 {
+        SatelliteDeliverySystemDescriptor::get_bcd(p, 2) as u8
+    }
+}
+
 /// コンポーネントグループ記述子。Descriptors.cpp:1984 (StoreContents)。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComponentGroupDescriptor {
@@ -1421,5 +1717,203 @@ mod tests {
         let desc = DescriptorBase { tag: 0x52, length: 1, payload: vec![0xAB], is_valid: true };
         let sid = StreamIdDescriptor::from_descriptor(&desc).unwrap();
         assert_eq!(sid.component_tag, 0xAB);
+    }
+
+    // ── BroadcasterNameDescriptor ──
+
+    #[test]
+    fn test_broadcaster_name_descriptor() {
+        // ARIB 生バイトとしてそのまま格納される
+        let name = vec![0x41u8, 0x42, 0x43];
+        let desc = DescriptorBase {
+            tag: 0xD8,
+            length: name.len() as u8,
+            payload: name.clone(),
+            is_valid: true,
+        };
+        let d = BroadcasterNameDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.broadcaster_name, name);
+    }
+
+    #[test]
+    fn test_broadcaster_name_descriptor_empty() {
+        // length=0 のとき空。
+        let desc = DescriptorBase { tag: 0xD8, length: 0, payload: vec![], is_valid: true };
+        let d = BroadcasterNameDescriptor::from_descriptor(&desc).unwrap();
+        assert!(d.broadcaster_name.is_empty());
+    }
+
+    #[test]
+    fn test_broadcaster_name_descriptor_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xD9, length: 1, payload: vec![0x41], is_valid: true };
+        assert!(BroadcasterNameDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── ExtendedBroadcasterDescriptor ──
+
+    #[test]
+    fn test_extended_broadcaster_terrestrial() {
+        // broadcaster_type=1(地上), terrestrial_broadcaster_id=0x1234
+        // affiliation_id_loop=2, broadcaster_id_loop=1
+        // affiliation: 0x0A,0x0B / broadcaster: onid=0x7E87,bid=0x05
+        let payload = vec![
+            0x10, // broadcaster_type=1 (上位4bit)
+            0x12, 0x34, // terrestrial_broadcaster_id
+            0x21, // affiliation=2, broadcaster=1
+            0x0A, 0x0B, // affiliation_id_list
+            0x7E, 0x87, 0x05, // broadcaster_id_list[0]
+        ];
+        let desc = DescriptorBase {
+            tag: 0xCE,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = ExtendedBroadcasterDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.broadcaster_type, 1);
+        let t = d.terrestrial.expect("terrestrial info");
+        assert_eq!(t.terrestrial_broadcaster_id, 0x1234);
+        assert_eq!(t.affiliation_id_list, vec![0x0A, 0x0B]);
+        assert_eq!(t.broadcaster_id_list.len(), 1);
+        assert_eq!(t.broadcaster_id_list[0].original_network_id, 0x7E87);
+        assert_eq!(t.broadcaster_id_list[0].broadcaster_id, 0x05);
+    }
+
+    #[test]
+    fn test_extended_broadcaster_non_terrestrial() {
+        // broadcaster_type=3(地上以外) のときは terrestrial を解析しない
+        let desc = DescriptorBase { tag: 0xCE, length: 1, payload: vec![0x30], is_valid: true };
+        let d = ExtendedBroadcasterDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.broadcaster_type, 3);
+        assert!(d.terrestrial.is_none());
+    }
+
+    #[test]
+    fn test_extended_broadcaster_terrestrial_truncated() {
+        // 地上だが長さが足りない (loop 宣言に対しペイロード不足)
+        let payload = vec![0x10, 0x12, 0x34, 0x21, 0x0A]; // affiliation=2 だが 1 バイトしかない
+        let desc = DescriptorBase {
+            tag: 0xCE,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        assert!(ExtendedBroadcasterDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_extended_broadcaster_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xCF, length: 1, payload: vec![0x10], is_valid: true };
+        assert!(ExtendedBroadcasterDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    // ── SIParameterDescriptor ──
+
+    #[test]
+    fn test_si_parameter_descriptor_nit_and_eit_pf() {
+        // parameter_version=0x05, update_time MJD=0xC8AB (適当な有効値)
+        // table[0]: table_id=0x40(NIT), desc_len=1, BCD=0x12 -> 12
+        // table[1]: table_id=0x4F(EIT_PF_OTHER), desc_len=1, BCD=0x03 -> 3
+        let payload = vec![
+            0x05, // parameter_version
+            0xC8, 0xAB, // update_time (MJD)
+            0x40, 0x01, 0x12, // NIT, len=1, cycle BCD 12
+            0x4F, 0x01, 0x03, // EIT[p/f other], len=1, cycle BCD 3
+        ];
+        let desc = DescriptorBase {
+            tag: 0xD7,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = SIParameterDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.parameter_version, 0x05);
+        assert_eq!(d.table_list.len(), 2);
+        assert_eq!(d.table_list[0].table_id, 0x40);
+        assert_eq!(d.table_list[0].info, SIParameterTableInfo::Nit { table_cycle: 12 });
+        assert_eq!(d.table_list[1].table_id, 0x4F);
+        assert_eq!(d.table_list[1].info, SIParameterTableInfo::EitPf { table_cycle: 3 });
+    }
+
+    #[test]
+    fn test_si_parameter_descriptor_hmleit() {
+        // table_id=0x4E(EIT_PF_ACTUAL), desc_len=4 -> HMLEIT
+        // HEIT BCD=0x11(11), MEIT BCD=0x22(22), LEIT BCD=0x33(33), p[3]=0x21 -> M=2,L=1
+        let payload = vec![
+            0x01, 0xC8, 0xAB,
+            0x4E, 0x04, 0x11, 0x22, 0x33, 0x21,
+        ];
+        let desc = DescriptorBase {
+            tag: 0xD7,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = SIParameterDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.table_list.len(), 1);
+        assert_eq!(
+            d.table_list[0].info,
+            SIParameterTableInfo::Hmleit {
+                heit_table_cycle: 11,
+                meit_table_cycle: 22,
+                leit_table_cycle: 33,
+                num_of_meit_event: 2,
+                num_of_leit_event: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_si_parameter_descriptor_eit_schedule() {
+        // table_id=0x50(EIT_SCHEDULE_ACTUAL), desc_len=8
+        // media_type_list[0]:
+        //   p[0]=0b01_01_1_000=0x58 -> media_type=1, pattern=1, eit_other_flag=true
+        //   p[1]=schedule_range BCD=0x07 -> 7
+        //   p[2..4]=base_cycle: 3 nibble of [0x01,0x21] -> 0,1,2 = 12
+        //     p[3]=0x21, cycle_group_count = 0x21 & 0x03 = 1
+        //   cycle_group[0]: p[4]=num_of_segment BCD=0x04 -> 4, p[5]=cycle BCD=0x05 -> 5
+        let payload = vec![
+            0x01, 0xC8, 0xAB,
+            0x50, 0x06,
+            0x58, // media_type/pattern/eit_other_flag
+            0x07, // schedule_range BCD
+            0x01, 0x21, // base_cycle (3 nibble -> 012=12), cycle_group_count = 0x21&0x03 = 1
+            0x04, 0x05, // cycle_group[0]: num_of_segment=4, cycle=5
+        ];
+        let desc = DescriptorBase {
+            tag: 0xD7,
+            length: payload.len() as u8,
+            payload,
+            is_valid: true,
+        };
+        let d = SIParameterDescriptor::from_descriptor(&desc).unwrap();
+        assert_eq!(d.table_list.len(), 1);
+        match &d.table_list[0].info {
+            SIParameterTableInfo::EitSchedule { media_type_list } => {
+                assert_eq!(media_type_list.len(), 1);
+                let m = &media_type_list[0];
+                assert_eq!(m.media_type, 1);
+                assert_eq!(m.pattern, 1);
+                assert!(m.eit_other_flag);
+                assert_eq!(m.schedule_range, 7);
+                assert_eq!(m.base_cycle, 12);
+                assert_eq!(m.cycle_group.len(), 1);
+                assert_eq!(m.cycle_group[0].num_of_segment, 4);
+                assert_eq!(m.cycle_group[0].cycle, 5);
+            }
+            other => panic!("unexpected info: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_si_parameter_descriptor_too_short() {
+        let desc = DescriptorBase { tag: 0xD7, length: 2, payload: vec![0x01, 0x02], is_valid: true };
+        assert!(SIParameterDescriptor::from_descriptor(&desc).is_none());
+    }
+
+    #[test]
+    fn test_si_parameter_descriptor_wrong_tag() {
+        let desc = DescriptorBase { tag: 0xD8, length: 3, payload: vec![0x01, 0x02, 0x03], is_valid: true };
+        assert!(SIParameterDescriptor::from_descriptor(&desc).is_none());
     }
 }

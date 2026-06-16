@@ -1,0 +1,20 @@
+[package]
+name = "libisdb_bit_analyzer"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB AnalyzerFilter BIT->BITNetworkInfo construction logic"
+
+[lib]
+name = "libisdb_bit_analyzer"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_descriptor = { path = "../libisdb_descriptor" }
+libisdb_arib_string = { path = "../libisdb_arib_string" }
+libisdb_datetime = { path = "../libisdb_datetime" }
+
+[dev-dependencies]
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_crc = { path = "../libisdb_crc" }
