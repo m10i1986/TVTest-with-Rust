@@ -1489,6 +1489,7 @@ mod tests {
 
         let list = db.get_event_list(0x7FE0, 0x0001, 0x0400).unwrap();
         // event_name が空のため is_event_valid = false → list は空
+        assert!(list.is_empty());
         // ただし event は event_map に存在するはず
         let raw = db.service_map.get(&ServiceInfo::new(0x7FE0, 0x0001, 0x0400)).unwrap();
         assert_eq!(raw.event_map.len(), 1);
@@ -1564,6 +1565,7 @@ mod tests {
 
         let sorted = db.get_event_list_sorted_by_time(0x7FE0, 0x0001, 0x0402);
         // event_name 無しで is_event_valid = false なので空
+        assert!(sorted.unwrap().is_empty());
         // TimeMap の順序を直接確認
         let raw = db.service_map.get(&ServiceInfo::new(0x7FE0, 0x0001, 0x0402)).unwrap();
         let times: Vec<u64> = raw.time_map.iter().map(|t| t.start_time).collect();
