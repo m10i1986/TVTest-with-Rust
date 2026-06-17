@@ -414,9 +414,6 @@ impl DataStreamer {
     pub fn add_on_output_error<F: Fn() + Send + 'static>(&self, f: F) {
         self.on_error.lock().unwrap().push(Box::new(f));
     }
-
-    /// `Core` への参照を取得する (StreamBufferDataStreamer 内部用)
-    fn core(&self) -> &Arc<Core> { &self.core }
 }
 
 impl Drop for DataStreamer {
