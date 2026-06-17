@@ -570,6 +570,9 @@ mod tests {
         let mut b = Vec::new();
         b.push(0x00); // TMD=free
         b.push(0x01); // num_languages=1
+        // language_tag(上位3bit) と dmf(下位5bit) のビット境界を明示する意図的記述。
+        // 両辺が 0 になるため clippy::eq_op が誤検知するので抑止する。
+        #[allow(clippy::eq_op)]
         b.push((0u8 << 5) | 0x00); // language_tag=0, dmf=0
         b.push(0x00); // language_code[0] (jpn=0x6A706E)
         b.push(0x00);

@@ -12,6 +12,6 @@ path = "src/main.rs"
 [dev-dependencies]
 
 [dependencies]
-libisdb_epg_data_file = { path = "../libisdb_epg_data_file" }
-libisdb_event_info = { path = "../libisdb_event_info" }
-libisdb_datetime = { path = "../libisdb_datetime" }
+libisdb_epg_data_file = { path = "../libisdb/libisdb_epg_data_file" }
+libisdb_event_info = { path = "../libisdb/libisdb_event_info" }
+libisdb_datetime = { path = "../libisdb/libisdb_datetime" }

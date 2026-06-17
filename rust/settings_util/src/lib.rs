@@ -108,6 +108,10 @@ pub fn format_double(value: f64, digits: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    // テスト用の浮動小数リテラル(3.14 / 2.718281828 / 3.14159)を
+    // clippy が π/e の近似値と誤検知するため、テストモジュール内で抑止する。
+    #![allow(clippy::approx_constant)]
+
     use super::*;
 
     #[test]
