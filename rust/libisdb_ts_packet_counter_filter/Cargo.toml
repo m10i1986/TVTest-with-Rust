@@ -1,0 +1,20 @@
+[package]
+name = "libisdb_ts_packet_counter_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB/Filters/TSPacketCounterFilter.cpp: TS packet counter filter with PAT/PMT tracking and per-service ES bitrate measurement"
+
+[lib]
+name = "libisdb_ts_packet_counter_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_bitrate = { path = "../libisdb_bitrate" }
+
+[dev-dependencies]
+libisdb_crc = { path = "../libisdb_crc" }
