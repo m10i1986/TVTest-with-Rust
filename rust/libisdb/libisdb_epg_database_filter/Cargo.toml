@@ -1,0 +1,22 @@
+[package]
+name = "libisdb_epg_database_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/EPGDatabaseFilter.cpp: EPG database filter"
+
+[lib]
+name = "libisdb_epg_database_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_epg_database = { path = "../libisdb_epg_database" }
+libisdb_datetime = { path = "../libisdb_datetime" }
+
+[dev-dependencies]
+libisdb_crc = { path = "../libisdb_crc" }
+libisdb_event_info = { path = "../libisdb_event_info" }

@@ -45,4 +45,5 @@ members = [
     "libisdb/libisdb_grabber_filter",
     "libisdb/libisdb_service_selector_filter",
     "libisdb/libisdb_caption_filter",
+    "libisdb/libisdb_epg_database_filter",
 ]

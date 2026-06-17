@@ -18,7 +18,9 @@
 // DescriptorBlock は libisdb_descriptor の DescriptorBlock で代替。
 // 記述子の具体クラス(CADescriptor等)は tag 検索で代替。
 
-use libisdb_psi_section::PsiSection;
+use std::collections::BTreeMap;
+
+use libisdb_psi_section::{PsiSection, PsiSectionParser};
 use libisdb_psi_table::{PsiSingleTable, PsiStreamTable, TableHandler};
 use libisdb_descriptor::DescriptorBlock;
 use libisdb_utilities::load16_be;
@@ -702,6 +704,26 @@ impl EITTable {
         true
     }
 
+    /// 完成済み PSI セクションから EITTable を構築する。
+    /// C++ では EITMultiTable の各セクションスロット(EITTable=PSISingleTable)に相当。
+    /// table_id が範囲外(0x4E-0x6F 以外)/データ不足なら None。
+    pub fn from_section(sec: &PsiSection) -> Option<Self> {
+        let mut t = Self::new();
+        let ok = {
+            let svc_id = &mut t.service_id;
+            let ts_id = &mut t.transport_stream_id;
+            let net_id = &mut t.original_network_id;
+            let seg = &mut t.segment_last_section_number;
+            let last_tid = &mut t.last_table_id;
+            let ev_list = &mut t.event_list;
+            Self::on_table_update(sec, svc_id, ts_id, net_id, seg, last_tid, ev_list)
+        };
+        if !ok { return None; }
+        // get_table_id/version/section_number は inner のセクションを参照するため設定する。
+        t.inner.set_cur_section(sec.clone());
+        Some(t)
+    }
+
     pub fn get_table_id(&self) -> u8 { self.inner.get_section().get_table_id() }
     pub fn get_version_number(&self) -> u8 { self.inner.get_section().get_version_number() }
     pub fn get_section_number(&self) -> u8 { self.inner.get_section().get_section_number() }
@@ -715,6 +737,219 @@ impl EITTable {
 }
 
 impl Default for EITTable { fn default() -> Self { Self::new() } }
+
+// ────────────────────────────────────────────────────────────────
+// EITMultiTable / EITPfScheduleTable
+// ────────────────────────────────────────────────────────────────
+
+/// EITMultiTable の 1 サービス分のエントリ。
+///
+/// C++ では各セクションスロットが EITTable(PSISingleTable)だが、本移植では
+/// 生の PsiSection を保持し、PSISingleTable::OnPSISection の
+/// `*pSection != m_CurSection`(内容差分)で更新判定する。
+struct EitMultiTableItem {
+    unique_id: u64,
+    last_section_number: u16,
+    version_number: u8,
+    /// section_number → 格納済みセクション(未受信は None)
+    section_list: Vec<Option<PsiSection>>,
+}
+
+/// EIT テーブル集合クラス。Tables.cpp:846 (EITMultiTable)。
+///
+/// unique_id = (original_network_id<<32 | transport_stream_id<<16 | service_id)
+/// でサービス別にセクションを管理する PSITable 相当。
+/// (本移植では EITPfScheduleTable の内部要素としてのみ使うため非公開メソッド主体)
+pub struct EITMultiTable {
+    table_list: Vec<EitMultiTableItem>,
+}
+
+impl EITMultiTable {
+    fn new() -> Self { Self { table_list: Vec::new() } }
+
+    /// Tables.cpp:907 (MakeTableUniqueID)。
+    pub fn make_table_unique_id(nid: u16, tsid: u16, sid: u16) -> u64 {
+        ((nid as u64) << 32) | ((tsid as u64) << 16) | (sid as u64)
+    }
+
+    /// セクションの unique_id を計算。Tables.cpp:892 (GetSectionTableUniqueID)。
+    fn section_unique_id(sec: &PsiSection) -> u64 {
+        let data_size = sec.get_payload_size() as usize;
+        if data_size < 6 {
+            return sec.get_table_id_extension() as u64;
+        }
+        match sec.get_payload_data() {
+            Some(p) => {
+                let tsid = load16_be(p);
+                let nid = load16_be(&p[2..]);
+                Self::make_table_unique_id(nid, tsid, sec.get_table_id_extension())
+            }
+            None => sec.get_table_id_extension() as u64,
+        }
+    }
+
+    fn get_table_index_by_unique_id(&self, unique_id: u64) -> Option<usize> {
+        self.table_list.iter().position(|t| t.unique_id == unique_id)
+    }
+
+    fn get_section(&self, index: usize, section_number: u16) -> Option<&PsiSection> {
+        let t = self.table_list.get(index)?;
+        if section_number > t.last_section_number { return None; }
+        t.section_list.get(section_number as usize)?.as_ref()
+    }
+
+    /// セクション格納。Tables.cpp:242 (PSITable::OnPSISection) + 内容差分判定。
+    /// 内容に変化があった(新規 or 差分)場合のみ true を返す。
+    fn on_section(&mut self, sec: &PsiSection) -> bool {
+        if sec.get_section_number() > sec.get_last_section_number() { return false; }
+        if sec.get_payload_size() == 0 { return false; }
+        if !sec.get_current_next_indicator() { return false; }
+
+        let uid = Self::section_unique_id(sec);
+        let index = match self.get_table_index_by_unique_id(uid) {
+            Some(i) => {
+                let t = &mut self.table_list[i];
+                if t.version_number != sec.get_version_number()
+                    || t.last_section_number != sec.get_last_section_number() as u16
+                {
+                    // バージョン/最終セクション番号が変化 → 全スロットを破棄して再構築
+                    t.last_section_number = sec.get_last_section_number() as u16;
+                    t.version_number = sec.get_version_number();
+                    let n = (t.last_section_number as usize) + 1;
+                    t.section_list.clear();
+                    t.section_list.resize_with(n, || None);
+                }
+                i
+            }
+            None => {
+                let last_sec = sec.get_last_section_number() as u16;
+                let n = (last_sec as usize) + 1;
+                let mut section_list = Vec::with_capacity(n);
+                section_list.resize_with(n, || None);
+                self.table_list.push(EitMultiTableItem {
+                    unique_id: uid,
+                    last_section_number: last_sec,
+                    version_number: sec.get_version_number(),
+                    section_list,
+                });
+                self.table_list.len() - 1
+            }
+        };
+
+        let slot = &mut self.table_list[index].section_list[sec.get_section_number() as usize];
+        // PSISingleTable::OnPSISection の内容差分判定(同一内容なら更新しない)。
+        if let Some(cur) = slot {
+            if cur == sec { return false; }
+        }
+        *slot = Some(sec.clone());
+        true
+    }
+
+    /// 指定エントリの全セクションを破棄する。Tables.cpp:191 (PSITable::ResetTable)。
+    fn reset_table(&mut self, index: usize) -> bool {
+        match self.table_list.get_mut(index) {
+            Some(t) => {
+                for s in &mut t.section_list { *s = None; }
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// EIT[p/f schedule] テーブルクラス。Tables.cpp:980 (EITPfScheduleTable)。
+///
+/// C++ では EITPfTable を継承するため、基底コンストラクタ(Tables.cpp:918)で
+/// p/f(0x4E/0x4F)を、自コンストラクタ(Tables.cpp:986)で schedule(0x50-0x6F)を
+/// それぞれ EITMultiTable にマップする。結果として table_id 0x4E-0x6F を扱う。
+/// C++ の SectionHandler によるセクション毎コールバックは、1 パケットで複数
+/// セクションが完成しうる EIT で取りこぼさないよう、store_packet が更新された
+/// EITTable のリストを返す形に置き換える(重複排除は EITMultiTable が担う)。
+pub struct EITPfScheduleTable {
+    parser: PsiSectionParser,
+    tables: BTreeMap<u8, EITMultiTable>,
+    last_updated_table_id: u8,
+    last_updated_section_number: u8,
+    last_updated_table_unique_id: u64,
+}
+
+impl EITPfScheduleTable {
+    pub fn new() -> Self {
+        let mut tables = BTreeMap::new();
+        // 0x4E/0x4F = p/f (EITPfTable 基底)、0x50-0x6F = schedule
+        for tid in 0x4Eu8..=0x6F {
+            tables.insert(tid, EITMultiTable::new());
+        }
+        Self {
+            parser: PsiSectionParser::new(true, false),
+            tables,
+            last_updated_table_id: 0xFF,
+            last_updated_section_number: 0xFF,
+            last_updated_table_unique_id: 0,
+        }
+    }
+
+    /// EITPfScheduleTable::Reset 相当(PSITableSet::Reset)。
+    pub fn reset(&mut self) {
+        self.parser.reset();
+        for t in self.tables.values_mut() { t.table_list.clear(); }
+        self.last_updated_table_id = 0xFF;
+        self.last_updated_section_number = 0xFF;
+        self.last_updated_table_unique_id = 0;
+    }
+
+    /// TS パケットを格納し、内容が更新された EIT セクションを EITTable として返す。
+    /// C++ では PSITableSet::StorePacket + SectionHandler(OnEITSection)に相当。
+    pub fn store_packet(&mut self, pkt: &TsPacket) -> Vec<EITTable> {
+        let mut updated = Vec::new();
+        // borrow splitting: parser と tables/last_* を分離する
+        let Self {
+            parser,
+            tables,
+            last_updated_table_id,
+            last_updated_section_number,
+            last_updated_table_unique_id,
+        } = self;
+
+        parser.store_packet(pkt, &mut |sec| {
+            if let Some(mt) = tables.get_mut(&sec.get_table_id()) {
+                if mt.on_section(sec) {
+                    *last_updated_table_id = sec.get_table_id();
+                    *last_updated_section_number = sec.get_section_number();
+                    *last_updated_table_unique_id = EITMultiTable::section_unique_id(sec);
+                    if let Some(eit) = EITTable::from_section(sec) {
+                        updated.push(eit);
+                    }
+                }
+            }
+        });
+
+        updated
+    }
+
+    /// 最後に更新された EITTable を返す。Tables.cpp:991 (GetLastUpdatedEITTable)。
+    pub fn get_last_updated_eit_table(&self) -> Option<EITTable> {
+        let mt = self.tables.get(&self.last_updated_table_id)?;
+        let index = mt.get_table_index_by_unique_id(self.last_updated_table_unique_id)?;
+        let sec = mt.get_section(index, self.last_updated_section_number as u16)?;
+        EITTable::from_section(sec)
+    }
+
+    /// 指定サービスのスケジュールテーブルをリセットする。Tables.cpp:1005
+    /// (ResetScheduleService)。全 EITMultiTable から該当サービスのセクションを破棄する。
+    pub fn reset_schedule_service(&mut self, nid: u16, tsid: u16, sid: u16) -> bool {
+        let uid = EITMultiTable::make_table_unique_id(nid, tsid, sid);
+        let mut reset_performed = false;
+        for mt in self.tables.values_mut() {
+            if let Some(index) = mt.get_table_index_by_unique_id(uid) {
+                if mt.reset_table(index) { reset_performed = true; }
+            }
+        }
+        reset_performed
+    }
+}
+
+impl Default for EITPfScheduleTable { fn default() -> Self { Self::new() } }
 
 // ────────────────────────────────────────────────────────────────
 // BITTable
@@ -1511,6 +1746,135 @@ mod tests {
         eit.store_packet(&pkt);
         eit.reset();
         assert_eq!(eit.get_event_count(), 0);
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // EITPfScheduleTable tests
+    // ────────────────────────────────────────────────────────────
+
+    /// EIT セクション(イベント0件、可変ヘッダ)を作る。
+    fn make_eit_sched_section(
+        table_id: u8, version: u8, section_number: u8, last_section_number: u8,
+        seg_last_section: u8, last_table_id: u8,
+        service_id: u16, ts_id: u16, net_id: u16,
+    ) -> Vec<u8> {
+        let payload_len = 6; // 6 fixed + 0 event
+        let section_length = (5 + payload_len + 4) as u16;
+        let mut s = Vec::new();
+        s.push(table_id);
+        s.push(0xB0 | ((section_length >> 8) as u8));
+        s.push((section_length & 0xFF) as u8);
+        s.push((service_id >> 8) as u8);
+        s.push((service_id & 0xFF) as u8);
+        s.push(0xC0 | ((version & 0x1F) << 1) | 0x01); // version + current_next=1
+        s.push(section_number);
+        s.push(last_section_number);
+        s.push((ts_id >> 8) as u8);
+        s.push((ts_id & 0xFF) as u8);
+        s.push((net_id >> 8) as u8);
+        s.push((net_id & 0xFF) as u8);
+        s.push(seg_last_section);
+        s.push(last_table_id);
+        append_crc(&mut s);
+        s
+    }
+
+    /// 複数セクションを 1 パケットに詰める(末尾は 0xFF スタッフィング)。
+    fn make_ts_packet_multi(pid: u16, sections: &[Vec<u8>]) -> TsPacket {
+        let mut data = [0xFFu8; TS_PACKET_SIZE];
+        data[0] = 0x47;
+        data[1] = 0x40 | ((pid >> 8) & 0x1F) as u8; // PUSI=1
+        data[2] = (pid & 0xFF) as u8;
+        data[3] = 0x10;
+        data[4] = 0x00; // pointer_field
+        let mut pos = 5;
+        for sec in sections {
+            let n = sec.len().min(TS_PACKET_SIZE - pos);
+            data[pos..pos + n].copy_from_slice(&sec[..n]);
+            pos += n;
+        }
+        let mut pkt = TsPacket::new(&data);
+        pkt.parse_packet(None);
+        pkt
+    }
+
+    #[test]
+    fn test_eit_pf_schedule_store_returns_updated() {
+        let mut table = EITPfScheduleTable::new();
+        let sec = make_eit_sched_section(0x50, 0, 0, 7, 7, 0x50, 0x0400, 0x0001, 0x7FE0);
+        let pkt = make_ts_packet(0x0012, true, &sec);
+        let updated = table.store_packet(&pkt);
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].get_service_id(), 0x0400);
+        assert_eq!(updated[0].get_table_id(), 0x50);
+        assert_eq!(updated[0].get_section_number(), 0);
+        let last = table.get_last_updated_eit_table().unwrap();
+        assert_eq!(last.get_service_id(), 0x0400);
+        assert_eq!(last.get_table_id(), 0x50);
+    }
+
+    #[test]
+    fn test_eit_pf_schedule_dedup() {
+        let mut table = EITPfScheduleTable::new();
+        let sec = make_eit_sched_section(0x50, 0, 0, 7, 7, 0x50, 0x0400, 0x0001, 0x7FE0);
+        let pkt = make_ts_packet(0x0012, true, &sec);
+        assert_eq!(table.store_packet(&pkt).len(), 1);
+        // 同一内容 → 内容差分判定で重複排除(空)
+        assert_eq!(table.store_packet(&pkt).len(), 0);
+    }
+
+    #[test]
+    fn test_eit_pf_schedule_handles_pf() {
+        // 0x4E (p/f actual) も扱う(C++ EITPfTable 基底のマップ)
+        let mut table = EITPfScheduleTable::new();
+        let sec = make_eit_sched_section(0x4E, 0, 0, 1, 0, 0x4E, 0x0400, 0x0001, 0x7FE0);
+        let pkt = make_ts_packet(0x0012, true, &sec);
+        assert_eq!(table.store_packet(&pkt).len(), 1);
+    }
+
+    #[test]
+    fn test_eit_pf_schedule_multiple_sections_one_packet() {
+        // 1 パケットに 2 サービスのセクションを詰めても両方処理される
+        let mut table = EITPfScheduleTable::new();
+        let s1 = make_eit_sched_section(0x50, 0, 0, 7, 7, 0x50, 0x0400, 0x0001, 0x7FE0);
+        let s2 = make_eit_sched_section(0x50, 0, 0, 7, 7, 0x50, 0x0401, 0x0001, 0x7FE0);
+        let pkt = make_ts_packet_multi(0x0012, &[s1, s2]);
+        let updated = table.store_packet(&pkt);
+        assert_eq!(updated.len(), 2);
+        assert_eq!(updated[0].get_service_id(), 0x0400);
+        assert_eq!(updated[1].get_service_id(), 0x0401);
+    }
+
+    #[test]
+    fn test_eit_pf_schedule_reset_schedule_service() {
+        let mut table = EITPfScheduleTable::new();
+        let sec = make_eit_sched_section(0x50, 0, 0, 7, 7, 0x50, 0x0400, 0x0001, 0x7FE0);
+        let pkt = make_ts_packet(0x0012, true, &sec);
+        assert_eq!(table.store_packet(&pkt).len(), 1);
+        assert_eq!(table.store_packet(&pkt).len(), 0); // dedup
+
+        // リセット後は同一セクション再受信で再配信される
+        assert!(table.reset_schedule_service(0x7FE0, 0x0001, 0x0400));
+        assert_eq!(table.store_packet(&pkt).len(), 1);
+
+        // 存在しないサービスの reset は false
+        assert!(!table.reset_schedule_service(0x7FE0, 0x0001, 0x9999));
+    }
+
+    #[test]
+    fn test_eit_table_from_section_via_schedule() {
+        // make_eit_section は 0x4E + 1 event。EITPfScheduleTable 経由で from_section を検証
+        let sec_bytes = make_eit_section(0x0400, 0x0001, 0x7FE0);
+        let pkt = make_ts_packet(0x0012, true, &sec_bytes);
+        let mut table = EITPfScheduleTable::new();
+        let updated = table.store_packet(&pkt);
+        assert_eq!(updated.len(), 1);
+        let eit = &updated[0];
+        assert_eq!(eit.get_service_id(), 0x0400);
+        assert_eq!(eit.get_transport_stream_id(), 0x0001);
+        assert_eq!(eit.get_original_network_id(), 0x7FE0);
+        assert_eq!(eit.get_event_count(), 1);
+        assert_eq!(eit.get_event(0).unwrap().event_id, 0x0001);
     }
 
     // ────────────────────────────────────────────────────────────

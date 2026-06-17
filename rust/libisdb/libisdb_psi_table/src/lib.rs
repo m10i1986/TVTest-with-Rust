@@ -117,6 +117,11 @@ impl PsiSingleTable {
 
     pub fn get_section(&self) -> &PsiSection { &self.cur_section }
 
+    /// 完成済みセクションを現在セクションとして直接設定する。
+    /// PsiTable のセクションスロット(C++ では各 PSISingleTable)から
+    /// 個別テーブルを組み立てる用途に使う。store_packet を経由しない。
+    pub fn set_cur_section(&mut self, sec: PsiSection) { self.cur_section = sec; }
+
     /// テーブル更新コールバック。デフォルトは常に true。PSITable.cpp:337。
     pub fn on_table_update_default(_cur: &PsiSection, _old: &PsiSection) -> bool { true }
 
