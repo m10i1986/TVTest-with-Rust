@@ -1,0 +1,16 @@
+[package]
+name = "libisdb_async_streaming_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/AsyncStreamingFilter.cpp: async streaming filter"
+
+[lib]
+name = "libisdb_async_streaming_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_stream_buffer = { path = "../libisdb_stream_buffer" }
+libisdb_source_filter = { path = "../libisdb_source_filter" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }

@@ -49,4 +49,5 @@ members = [
     "libisdb/libisdb_logo_downloader_filter",
     "libisdb/libisdb_source_filter",
     "libisdb/libisdb_stream_buffer_filter",
+    "libisdb/libisdb_async_streaming_filter",
 ]
