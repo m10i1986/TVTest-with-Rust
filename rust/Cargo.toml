@@ -48,4 +48,5 @@ members = [
     "libisdb/libisdb_epg_database_filter",
     "libisdb/libisdb_logo_downloader_filter",
     "libisdb/libisdb_source_filter",
+    "libisdb/libisdb_stream_buffer_filter",
 ]

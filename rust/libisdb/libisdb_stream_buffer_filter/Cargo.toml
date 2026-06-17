@@ -1,0 +1,15 @@
+[package]
+name = "libisdb_stream_buffer_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/StreamBufferFilter.cpp: stream buffer filter"
+
+[lib]
+name = "libisdb_stream_buffer_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_data_streamer = { path = "../libisdb_data_streamer" }
+libisdb_stream_buffer = { path = "../libisdb_stream_buffer" }

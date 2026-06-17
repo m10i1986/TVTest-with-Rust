@@ -197,8 +197,10 @@ fn streaming_loop(core: Arc<Core>) {
         }
     }
 
-    // DataStreamer::Stop → m_StreamReader.Close 相当
-    core.inner.lock().unwrap().reader = None;
+    // C++ の DataStreamer::Stop は StopStreamingThread のみで m_StreamReader は閉じない
+    // (reader を閉じるのは Close()/Pause()/FreeInputBuffer/SetInputBuffer)。
+    // 従って停止後も reader を保持し、FlushBuffer が残データをドレインできるようにする
+    // (DataStreamer.cpp:93 Stop / DataStreamer.cpp:174 FlushBuffer)。
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +254,11 @@ impl DataStreamer {
 
         {
             let inner = self.core.inner.lock().unwrap();
-            if inner.input_buffer.is_none() { return false; }
+            if inner.input_buffer.is_none() {
+                // C++ DataStreamer::Start は入力バッファが無い場合スレッドを起動せず
+                // true を返す(同期モード=InputData が直接 OutputData する)。
+                return true;
+            }
         }
 
         self.core.stop.store(false, Ordering::Release);
@@ -399,10 +405,56 @@ impl DataStreamer {
     }
 
     // DataStreamer.cpp:163
+    /// 入力バッファをクリアし、出力(`DataOutput::clear_output`)もクリアする。
+    /// C++ `DataStreamer::ClearBuffer` と同じく出力キャッシュ(cache_buf)は触らない。
     pub fn clear_buffer(&self) {
-        let mut inner = self.core.inner.lock().unwrap();
-        if let Some(buf) = &inner.input_buffer { buf.clear(); }
-        inner.cache_buf.clear();
+        {
+            let inner = self.core.inner.lock().unwrap();
+            if let Some(buf) = &inner.input_buffer { buf.clear(); }
+        }
+        self.core.output.lock().unwrap().clear_output();
+    }
+
+    // DataStreamer.cpp:174
+    /// 入力バッファに残っているデータを同期的に出力へ書き出す。
+    ///
+    /// スレッド稼働中(`is_started()`)は `false`。`timeout` が 0 の場合は無制限。
+    /// C++ の `FlushBuffer` と同じく、reader にデータがある間 `fill_output_cache`→
+    /// `output_cached_data` を繰り返し、最後に残キャッシュを書き出す。書き出しに
+    /// 失敗した場合やタイムアウトした場合は `false`。
+    pub fn flush_buffer(&self, timeout: Duration) -> bool {
+        if self.is_started() {
+            return false;
+        }
+
+        let start = std::time::Instant::now();
+
+        loop {
+            let has_data = {
+                let inner = self.core.inner.lock().unwrap();
+                inner.reader.as_ref().is_some_and(|r| r.is_data_available())
+            };
+            if !has_data {
+                break;
+            }
+
+            if !timeout.is_zero() && start.elapsed() >= timeout {
+                return false;
+            }
+
+            let filled = {
+                let mut inner = self.core.inner.lock().unwrap();
+                inner.fill_output_cache()
+            };
+            if !filled {
+                break;
+            }
+            if !self.core.output_cached_data() {
+                return false;
+            }
+        }
+
+        self.core.output_cached_data()
     }
 
     // DataStreamer.cpp:292
@@ -479,6 +531,12 @@ impl StreamBufferDataStreamer {
 
     pub fn get_output_buffer(&self) -> Option<Arc<StreamBuffer>> {
         self.output_shared.0.lock().unwrap().buffer.clone()
+    }
+
+    // StreamBufferDataStreamer.cpp:61
+    /// 出力バッファを取り外して返す(内部参照は None になる)。C++ `DetachOutputBuffer`。
+    pub fn detach_output_buffer(&self) -> Option<Arc<StreamBuffer>> {
+        self.output_shared.0.lock().unwrap().buffer.take()
     }
 
     // StreamBufferDataStreamer.cpp:69
@@ -610,11 +668,14 @@ mod tests {
     }
 
     #[test]
-    fn test_start_requires_input_buffer() {
+    fn test_start_without_input_buffer_no_thread() {
+        // C++ DataStreamer::Start は入力バッファが無くてもスレッドを起動せず true を返す
+        // (同期モード)。is_started() はスレッド未起動なので false のまま。
         let (out, _) = VecOutput::new();
         let streamer = DataStreamer::new(Box::new(out));
-        // 入力バッファなしでは start できない
-        assert!(!streamer.start());
+        assert!(streamer.start());
+        assert!(!streamer.is_started());
+        streamer.stop();
     }
 
     #[test]
@@ -674,6 +735,63 @@ mod tests {
 
         sbds.free_output_buffer();
         assert!(!sbds.has_output_buffer());
+    }
+
+    #[test]
+    fn test_stream_buffer_data_streamer_detach_output_buffer() {
+        let sbds = StreamBufferDataStreamer::new();
+        // バッファ未設定なら None
+        assert!(sbds.detach_output_buffer().is_none());
+
+        let buf = make_stream_buffer(256, 1, 4);
+        sbds.set_output_buffer(Arc::clone(&buf));
+        assert!(sbds.has_output_buffer());
+
+        let detached = sbds.detach_output_buffer();
+        assert!(detached.is_some());
+        assert!(Arc::ptr_eq(&detached.unwrap(), &buf));
+        // 取り外し後は保持していない
+        assert!(!sbds.has_output_buffer());
+    }
+
+    #[test]
+    fn test_flush_buffer_fails_while_started() {
+        let (out, _) = VecOutput::new();
+        let streamer = DataStreamer::new(Box::new(out));
+        streamer.create_input_buffer(64, 2, 8);
+        streamer.allocate_output_cache_buffer(64);
+
+        assert!(streamer.start());
+        // スレッド稼働中はフラッシュ不可
+        assert!(!streamer.flush_buffer(Duration::ZERO));
+        streamer.stop();
+    }
+
+    #[test]
+    fn test_flush_buffer_drains_remaining_after_stop() {
+        // 出力キャッシュ未確保でスレッドを開始するとスレッドは消費しない
+        // (fill_output_cache が cap==0 で false を返すため)。停止後も reader は
+        // 保持されるので、キャッシュ確保後の flush_buffer で残データを同期ドレインできる。
+        let (out, received) = VecOutput::new();
+        let streamer = DataStreamer::new(Box::new(out));
+
+        let input_buf = make_stream_buffer(64, 4, 16);
+        streamer.set_input_buffer(Arc::clone(&input_buf));
+
+        assert!(streamer.start());
+
+        let data: Vec<u8> = (0u8..64).collect();
+        assert!(streamer.input_data(&data));
+
+        streamer.stop();
+        assert!(!streamer.is_started());
+
+        // 停止後にキャッシュを確保して同期フラッシュ
+        streamer.allocate_output_cache_buffer(64);
+        assert!(streamer.flush_buffer(Duration::ZERO));
+
+        let got = received.lock().unwrap().clone();
+        assert_eq!(got, data, "停止後の残データが flush_buffer で書き出されるべき");
     }
 
     #[test]
