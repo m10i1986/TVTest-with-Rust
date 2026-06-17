@@ -1,0 +1,24 @@
+[package]
+name = "libisdb_logo_downloader_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/LogoDownloaderFilter.cpp: logo downloader filter"
+
+[lib]
+name = "libisdb_logo_downloader_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+libisdb_ts_info = { path = "../libisdb_ts_info" }
+libisdb_ts_tables = { path = "../libisdb_ts_tables" }
+libisdb_descriptor = { path = "../libisdb_descriptor" }
+libisdb_ts_download = { path = "../libisdb_ts_download" }
+libisdb_psi_section = { path = "../libisdb_psi_section" }
+libisdb_utilities = { path = "../libisdb_utilities" }
+libisdb_datetime = { path = "../libisdb_datetime" }
+
+[dev-dependencies]
+libisdb_crc = { path = "../libisdb_crc" }
