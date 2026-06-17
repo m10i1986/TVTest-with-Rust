@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_source_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/SourceFilter.cpp + Base/EventListener.hpp: source filter base"
+
+[lib]
+name = "libisdb_source_filter"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
