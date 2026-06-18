@@ -1,0 +1,21 @@
+[package]
+name = "tvtest_basic_window"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CBasicWindow (window position/style/message wrapper and monitor geometry), using windows-rs"
+
+[lib]
+name = "tvtest_basic_window"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_winutil = { path = "../winutil" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+]
