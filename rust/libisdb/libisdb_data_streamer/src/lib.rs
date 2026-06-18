@@ -322,8 +322,16 @@ impl DataStreamer {
                 inner.stats.input_bytes += written as u64;
                 written == data.len()
             } else {
-                // 同期モード: OutputData を直接呼ぶ (m_OutputCacheBuffer なし版)
+                // 入力バッファなし
                 drop(inner);
+                let cache_cap = self.core.inner.lock().unwrap().cache_cap;
+                if cache_cap > 0 {
+                    // DataStreamer.cpp:140 — キャッシュありの同期出力 (OutputDataWithCache)
+                    let r = self.output_data_with_cache(data);
+                    self.core.inner.lock().unwrap().stats.input_bytes += data.len() as u64;
+                    return r;
+                }
+                // DataStreamer.cpp:142 — 直接出力 (同期モード, キャッシュなし)
                 let written = self.core.output.lock().unwrap().output_data(data);
                 let mut inner2 = self.core.inner.lock().unwrap();
                 if written > 0 {
@@ -340,6 +348,44 @@ impl DataStreamer {
         cvar.notify_one();
 
         result
+    }
+
+    // DataStreamer.cpp:368
+    /// 入力バッファが無くキャッシュが有る場合に、データをキャッシュへ蓄積し、満杯に
+    /// なったら出力へ書き出す(`OutputDataWithCache`)。
+    ///
+    /// 原実装はオフセット欠落の memcpy とローカル `BufferUsed` 未リセットによる潜在バグを
+    /// 抱えるため、ここではキャッシュ末尾への追記・満杯時フラッシュとして正しく実装する。
+    /// 書き出されなかった残りはキャッシュに保持され、`flush_buffer` / 次回入力で書き出される。
+    /// フラッシュに失敗した場合は `false`。
+    fn output_data_with_cache(&self, data: &[u8]) -> bool {
+        let buffer_size = self.core.inner.lock().unwrap().cache_cap;
+        if buffer_size == 0 {
+            return false;
+        }
+
+        let mut remain = data.len();
+        while remain > 0 {
+            let need_flush = {
+                let mut inner = self.core.inner.lock().unwrap();
+                let used = inner.cache_buf.len();
+                if used < buffer_size {
+                    let copy = (buffer_size - used).min(remain);
+                    let start = data.len() - remain;
+                    inner.cache_buf.extend_from_slice(&data[start..start + copy]);
+                    remain -= copy;
+                    inner.cache_buf.len() >= buffer_size
+                } else {
+                    true
+                }
+            };
+
+            if need_flush && !self.core.output_cached_data() {
+                return false;
+            }
+        }
+
+        true
     }
 
     // DataStreamer.cpp:204
@@ -603,6 +649,47 @@ mod tests {
 
         let got = received.lock().unwrap().clone();
         assert_eq!(&got, data);
+    }
+
+    #[test]
+    fn test_cache_mode_buffers_until_full() {
+        // 入力バッファなし & キャッシュあり → OutputDataWithCache 経路。
+        // キャッシュが満杯になるまで出力されず、満杯でフラッシュ。
+        let (out, received) = VecOutput::new();
+        let streamer = DataStreamer::new(Box::new(out));
+        streamer.allocate_output_cache_buffer(10);
+
+        // 8 バイト → キャッシュに溜まり未出力
+        assert!(streamer.input_data(&[1u8; 8]));
+        assert_eq!(received.lock().unwrap().len(), 0);
+
+        // さらに 5 バイト → 10 で満杯フラッシュ、残り 3 はキャッシュ
+        assert!(streamer.input_data(&[2u8; 5]));
+        assert_eq!(received.lock().unwrap().len(), 10);
+
+        // flush_buffer で残り 3 を書き出し
+        assert!(streamer.flush_buffer(Duration::ZERO));
+        assert_eq!(received.lock().unwrap().len(), 13);
+
+        let stats = streamer.get_statistics();
+        assert_eq!(stats.input_bytes, 13);
+        assert_eq!(stats.output_bytes, 13);
+        // 10 のフラッシュ + 残 3 のフラッシュ = 2 回
+        assert_eq!(stats.output_count, 2);
+    }
+
+    #[test]
+    fn test_cache_mode_preserves_byte_order() {
+        let (out, received) = VecOutput::new();
+        let streamer = DataStreamer::new(Box::new(out));
+        streamer.allocate_output_cache_buffer(4);
+
+        for chunk in [&[1u8, 2, 3][..], &[4, 5][..], &[6, 7, 8, 9][..]] {
+            assert!(streamer.input_data(chunk));
+        }
+        assert!(streamer.flush_buffer(Duration::ZERO));
+
+        assert_eq!(*received.lock().unwrap(), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     #[test]

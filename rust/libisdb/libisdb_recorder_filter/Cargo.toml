@@ -1,0 +1,20 @@
+[package]
+name = "libisdb_recorder_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/RecorderFilter.cpp: recorder filter"
+
+[lib]
+name = "libisdb_recorder_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_data_streamer = { path = "../libisdb_data_streamer" }
+libisdb_stream_writer = { path = "../libisdb_stream_writer" }
+libisdb_stream_selector = { path = "../libisdb_stream_selector" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
+
+[dev-dependencies]
+libisdb_ts_info = { path = "../libisdb_ts_info" }

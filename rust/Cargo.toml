@@ -53,4 +53,5 @@ members = [
     "libisdb/libisdb_stream",
     "libisdb/libisdb_stream_source_filter",
     "libisdb/libisdb_stream_writer",
+    "libisdb/libisdb_recorder_filter",
 ]
