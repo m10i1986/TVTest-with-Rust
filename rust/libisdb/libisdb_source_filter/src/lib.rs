@@ -150,6 +150,22 @@ impl SourceFilterState {
         self.source_mode
     }
 
+    /// `SetSourceMode` の検証付き設定。モードがちょうど `PUSH` か `PULL` 単独で、かつ
+    /// `available` に含まれる場合のみ更新して `true`。違反時は変更せず `false`。
+    ///
+    /// 派生フィルタが `SourceFilter::set_source_mode` をオーバーライドする際に、基底の
+    /// 検証ロジック(C++ `SourceFilter::SetSourceMode`)を再利用するための入口。
+    pub fn try_set_source_mode(&mut self, mode: SourceMode, available: SourceMode) -> bool {
+        if mode != SourceMode::PUSH && mode != SourceMode::PULL {
+            return false;
+        }
+        if !available.intersects(mode) {
+            return false;
+        }
+        self.source_mode = mode;
+        true
+    }
+
     /// リスナリストへの参照(イベント通知のため)。
     pub fn listeners(&self) -> &EventListenerList<dyn SourceEventListener> {
         &self.listeners
@@ -237,14 +253,8 @@ pub trait SourceFilter {
     /// 検証: モードがちょうど `PUSH` か `PULL` のいずれか単独で、かつ
     /// `available_source_modes()` に含まれていること。違反時は `false`(変更なし)。
     fn set_source_mode(&mut self, mode: SourceMode) -> bool {
-        if mode != SourceMode::PUSH && mode != SourceMode::PULL {
-            return false;
-        }
-        if !self.available_source_modes().intersects(mode) {
-            return false;
-        }
-        self.source_state_mut().source_mode = mode;
-        true
+        let available = self.available_source_modes();
+        self.source_state_mut().try_set_source_mode(mode, available)
     }
 
     /// リスナを追加する。C++ `AddEventListener`(SourceFilter.cpp:61)。

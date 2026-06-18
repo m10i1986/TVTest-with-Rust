@@ -1,0 +1,16 @@
+[package]
+name = "libisdb_stream_source_filter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Filters/StreamSourceFilter.cpp: stream source filter"
+
+[lib]
+name = "libisdb_stream_source_filter"
+path = "src/lib.rs"
+
+[dependencies]
+libisdb_filter_base = { path = "../libisdb_filter_base" }
+libisdb_source_filter = { path = "../libisdb_source_filter" }
+libisdb_stream = { path = "../libisdb_stream" }
+libisdb_ts_packet = { path = "../libisdb_ts_packet" }
