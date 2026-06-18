@@ -1,0 +1,13 @@
+[package]
+name = "libisdb_stream_writer"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of LibISDB Base/StreamWriter.cpp: stream writer"
+
+[lib]
+name = "libisdb_stream_writer"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"

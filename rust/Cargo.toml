@@ -52,4 +52,5 @@ members = [
     "libisdb/libisdb_async_streaming_filter",
     "libisdb/libisdb_stream",
     "libisdb/libisdb_stream_source_filter",
+    "libisdb/libisdb_stream_writer",
 ]
