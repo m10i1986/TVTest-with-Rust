@@ -29,9 +29,13 @@
 //! ([`normalize_placement_to_monitor`] / [`normalize_placement_to_work`])、不透明度検証
 //! ([`opacity_is_valid`])。HWND 依存部分は [`BasicWindow`] が薄くラップする。
 //!
-//! 派生の `CCustomWindow`(WndProc によるメッセージ振り分け)/`CPopupWindow`
-//! (ダークモード対応)は、同じメッセージ処理を共有する `CView` の移植および
-//! `DarkMode.cpp` の移植と合わせて別途対応する。
+//! 派生クラスのうち `CCustomWindow`(原実装の WndProc によるメッセージ振り分け)も本クレートで
+//! 移植する。メッセージ分類 ([`classify_message`]) と生成/破棄系の戻り値決定
+//! ([`nccreate_outcome`] / [`create_outcome`]) を純粋関数に切り出し、`GWLP_USERDATA` を使う
+//! トランポリン ([`custom_wnd_proc`]) と仮想関数契約 ([`CustomWindowHandler`]) を提供する。
+//! `CPopupWindow` のダークモード状態遷移 ([`PopupDarkModeState`]) も純粋に表すが、
+//! `DarkMode.cpp`(`SetWindowAllowDarkMode` 等)が未移植のため Win32 への接続はその移植後に行う。
+//! 実ウィンドウ生成(原実装で純粋仮想の `Create`)は派生側の責務のため本クレートには含めない。
 
 #![cfg(windows)]
 
@@ -42,12 +46,13 @@ use windows::Win32::Graphics::Gdi::{
     RDW_INVALIDATE, RDW_UPDATENOW, REDRAW_WINDOW_FLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetClientRect, GetParent, GetWindowLongW, GetWindowPlacement, GetWindowRect,
-    IsIconic, IsWindowVisible, IsZoomed, MoveWindow, PostMessageW, SendMessageW,
-    SetLayeredWindowAttributes, SetParent, SetWindowLongW, SetWindowPlacement, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA, SWP_DRAWFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
-    WINDOWPLACEMENT, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WM_SIZE,
+    DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindowLongPtrW, GetWindowLongW,
+    GetWindowPlacement, GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, MoveWindow,
+    PostMessageW, SendMessageW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
+    SetWindowLongW, SetWindowPlacement, SetWindowPos, ShowWindow, CREATESTRUCTW, GWLP_USERDATA,
+    GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA, SWP_DRAWFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOWPLACEMENT,
+    WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_SIZE, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
 };
 
 // ===========================================================================
@@ -655,6 +660,201 @@ fn monitor_and_work_from_rect(rc: RECT) -> Option<(Rect, Rect)> {
 }
 
 // ===========================================================================
+// CCustomWindow: WndProc によるメッセージ振り分け
+// ===========================================================================
+
+/// `CCustomWindow` のメッセージ処理仮想関数に対応するハンドラ。
+/// 原実装 `CCustomWindow` (BasicWindow.h:98, BasicWindow.cpp:470-512)。
+///
+/// 生成/破棄系メッセージ(`WM_NCCREATE` / `WM_CREATE` / `WM_DESTROY`)では `handle_message` が、
+/// それ以外では `on_message` が呼ばれる。既定の `handle_message` は `on_message` に委譲し、
+/// 既定の `on_message` は `DefWindowProc` を返す(原実装 BasicWindow.cpp:503-512 と同じ)。
+pub trait CustomWindowHandler {
+    /// 原実装 `OnCreate` 相当 (BasicWindow.cpp:375)。`WM_NCCREATE` 受信時に HWND を結び付ける
+    /// (`pWindow->m_hwnd = hwnd`)。生成失敗時は null HWND で呼ばれる(`m_hwnd = nullptr`)。
+    fn set_handle(&mut self, hwnd: HWND);
+
+    /// 原実装 `CBasicWindow::OnDestroy` (BasicWindow.cpp:386)。`WM_DESTROY` 受信時に
+    /// 位置を保存して HWND を切り離す。
+    fn on_destroy(&mut self);
+
+    /// 原実装 `HandleMessage` (BasicWindow.cpp:503)。既定は `OnMessage` に委譲。
+    fn handle_message(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        self.on_message(hwnd, msg, wparam, lparam)
+    }
+
+    /// 原実装 `OnMessage` (BasicWindow.cpp:509)。既定は `DefWindowProc`。
+    fn on_message(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+}
+
+/// `WndProc` 内でメッセージを振り分ける種別。原実装 `CCustomWindow::WndProc`
+/// (BasicWindow.cpp:470) の `if` 連鎖に対応。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomWindowRoute {
+    /// `WM_NCCREATE`: ここで `this` を結び付け、`handle_message` の結果で生成可否を返す。
+    NcCreate,
+    /// `WM_CREATE`: `handle_message` が負なら生成失敗(-1)。
+    Create,
+    /// `WM_DESTROY`: `handle_message` 後に `OnDestroy`。
+    Destroy,
+    /// それ以外: `on_message`。
+    Other,
+}
+
+/// メッセージを [`CustomWindowRoute`] に分類する。原実装 `WndProc` の分岐 (BasicWindow.cpp:474-497)。
+pub fn classify_message(msg: u32) -> CustomWindowRoute {
+    match msg {
+        WM_NCCREATE => CustomWindowRoute::NcCreate,
+        WM_CREATE => CustomWindowRoute::Create,
+        WM_DESTROY => CustomWindowRoute::Destroy,
+        _ => CustomWindowRoute::Other,
+    }
+}
+
+/// `WM_NCCREATE` の `handle_message` 結果から `(戻り値, HWND を切り離すか)` を決める。
+/// 原実装 (BasicWindow.cpp:475-480): 結果が 0(偽)なら `m_hwnd=nullptr` して `FALSE`、
+/// それ以外は `TRUE`。
+pub fn nccreate_outcome(handle_result: LRESULT) -> (LRESULT, bool) {
+    if handle_result.0 == 0 {
+        (LRESULT(0), true) // FALSE、HWND 切り離し
+    } else {
+        (LRESULT(1), false) // TRUE
+    }
+}
+
+/// `WM_CREATE` の `handle_message` 結果から `(戻り値, HWND を切り離すか)` を決める。
+/// 原実装 (BasicWindow.cpp:485-491): 負なら `m_hwnd=nullptr` して `-1`、それ以外は `0`。
+pub fn create_outcome(handle_result: LRESULT) -> (LRESULT, bool) {
+    if handle_result.0 < 0 {
+        (LRESULT(-1), true)
+    } else {
+        (LRESULT(0), false)
+    }
+}
+
+/// 原実装 `CCustomWindow::WndProc` (BasicWindow.cpp:470) のトランポリン。
+///
+/// 派生ウィンドウのウィンドウクラスの `lpfnWndProc` にこの関数を登録し、`CreateWindowEx` の
+/// 最終引数(`lpParam`)に `*mut H`(ハンドラ)を渡す。`WM_NCCREATE` で `lpCreateParams` から
+/// ハンドラを取り出して `GWLP_USERDATA` に保存し(原実装 `OnCreate`, BasicWindow.cpp:375)、
+/// 以降は `GWLP_USERDATA` から復元する(原実装 `GetBasicWindow`, BasicWindow.cpp:397)。
+///
+/// # Safety
+/// `H` ハンドラはウィンドウより長く生存している必要がある。`lpParam` には有効な `*mut H` を
+/// 渡すこと。複数の関心事(生成パラメータ・ユーザーデータ)を生ポインタ経由で扱う。
+pub unsafe extern "system" fn custom_wnd_proc<H: CustomWindowHandler>(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if classify_message(msg) == CustomWindowRoute::NcCreate {
+        // OnCreate 相当: lpCreateParams から this を取り出して USERDATA に保存する。
+        let cs = lparam.0 as *const CREATESTRUCTW;
+        if cs.is_null() {
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        let this = (*cs).lpCreateParams as *mut H;
+        if this.is_null() {
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, this as isize);
+        (*this).set_handle(hwnd);
+
+        let r = (*this).handle_message(hwnd, msg, wparam, lparam);
+        let (ret, clear) = nccreate_outcome(r);
+        if clear {
+            // 原実装は m_hwnd のみ null 化(USERDATA はそのまま)。
+            (*this).set_handle(HWND::default());
+        }
+        return ret;
+    }
+
+    let this = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut H;
+    if this.is_null() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    match classify_message(msg) {
+        CustomWindowRoute::Create => {
+            let r = (*this).handle_message(hwnd, msg, wparam, lparam);
+            let (ret, clear) = create_outcome(r);
+            if clear {
+                (*this).set_handle(HWND::default());
+            }
+            ret
+        }
+        CustomWindowRoute::Destroy => {
+            (*this).handle_message(hwnd, msg, wparam, lparam);
+            // OnDestroy: 位置保存 + m_hwnd/USERDATA クリア。
+            (*this).on_destroy();
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            LRESULT(0)
+        }
+        // NcCreate は上で処理済み。
+        _ => (*this).on_message(hwnd, msg, wparam, lparam),
+    }
+}
+
+// ===========================================================================
+// CPopupWindow: ダークモード状態遷移
+// ===========================================================================
+
+/// `CPopupWindow` のダークモード状態。原実装 `CPopupWindow` (BasicWindow.h:111,
+/// BasicWindow.cpp:517)。`m_fAllowDarkMode` / `m_fDarkMode` に対応する。
+///
+/// `DarkMode.cpp`(`SetWindowAllowDarkMode` / `IsDarkMode` / `SetWindowFrameDarkMode` /
+/// `IsDarkModeSettingChanged`)は未移植のため、本構造体は状態遷移ロジックのみを純粋に表す。
+/// 各 API の結果は引数で注入してテスト可能にしている。Win32 への接続は DarkMode 移植後に行う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PopupDarkModeState {
+    pub allow_dark_mode: bool,
+    pub dark_mode: bool,
+}
+
+impl PopupDarkModeState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `WM_CREATE` 処理。原実装 (BasicWindow.cpp:520-528)。
+    ///
+    /// - `allow_ok`: `SetWindowAllowDarkMode(m_hwnd, true)` の結果。
+    /// - `is_dark`: `TVTest::IsDarkMode()`。
+    /// - `frame_set_ok`: `SetWindowFrameDarkMode(m_hwnd, true)` の結果(`is_dark` のときのみ呼ばれる)。
+    pub fn on_create(&mut self, allow_ok: bool, is_dark: bool, frame_set_ok: bool) {
+        if allow_ok {
+            self.allow_dark_mode = true;
+            if is_dark && frame_set_ok {
+                self.dark_mode = true;
+            }
+        }
+    }
+
+    /// `WM_SETTINGCHANGE` 処理。原実装 (BasicWindow.cpp:530-543)。
+    /// 戻り値は `OnDarkModeChanged` を呼ぶべきか(ダークモード状態が実際に切り替わったか)。
+    ///
+    /// - `setting_changed`: `IsDarkModeSettingChanged(...)`。
+    /// - `is_dark`: 変更後の `TVTest::IsDarkMode()`。
+    /// - `frame_set_ok`: `SetWindowFrameDarkMode(hwnd, is_dark)` の結果
+    ///   (状態が異なるときのみ呼ばれる)。
+    pub fn on_setting_change(
+        &mut self,
+        setting_changed: bool,
+        is_dark: bool,
+        frame_set_ok: bool,
+    ) -> bool {
+        if self.allow_dark_mode && setting_changed && self.dark_mode != is_dark && frame_set_ok {
+            self.dark_mode = is_dark;
+            return true;
+        }
+        false
+    }
+}
+
+// ===========================================================================
 // テスト(純粋ロジック)
 // ===========================================================================
 
@@ -820,5 +1020,160 @@ mod tests {
         assert!(!w.post_message(0, WPARAM(0), LPARAM(0)));
         assert!(!w.send_size_message());
         assert!(!w.set_opacity(128, true));
+    }
+
+    // --- CCustomWindow: メッセージ分類 ---
+
+    #[test]
+    fn test_classify_message() {
+        assert_eq!(classify_message(WM_NCCREATE), CustomWindowRoute::NcCreate);
+        assert_eq!(classify_message(WM_CREATE), CustomWindowRoute::Create);
+        assert_eq!(classify_message(WM_DESTROY), CustomWindowRoute::Destroy);
+        assert_eq!(classify_message(WM_SIZE), CustomWindowRoute::Other);
+        assert_eq!(classify_message(0), CustomWindowRoute::Other);
+    }
+
+    // --- CCustomWindow: 生成可否の戻り値決定 ---
+
+    #[test]
+    fn test_nccreate_outcome() {
+        // 偽(0)→ FALSE(0) かつ HWND 切り離し。
+        let (r, clear) = nccreate_outcome(LRESULT(0));
+        assert_eq!(r.0, 0);
+        assert!(clear);
+        // 真(非0)→ TRUE(1)、切り離さない。
+        let (r, clear) = nccreate_outcome(LRESULT(1));
+        assert_eq!(r.0, 1);
+        assert!(!clear);
+        // 負でも非0なら真扱い → TRUE。
+        let (r, clear) = nccreate_outcome(LRESULT(-1));
+        assert_eq!(r.0, 1);
+        assert!(!clear);
+    }
+
+    #[test]
+    fn test_create_outcome() {
+        // 負 → -1 かつ切り離し。
+        let (r, clear) = create_outcome(LRESULT(-1));
+        assert_eq!(r.0, -1);
+        assert!(clear);
+        // 0 → 0、切り離さない。
+        let (r, clear) = create_outcome(LRESULT(0));
+        assert_eq!(r.0, 0);
+        assert!(!clear);
+        // 正 → 0、切り離さない。
+        let (r, clear) = create_outcome(LRESULT(5));
+        assert_eq!(r.0, 0);
+        assert!(!clear);
+    }
+
+    // --- CCustomWindow: HandleMessage の既定委譲 ---
+
+    struct DelegateProbe {
+        on_message_msg: Option<u32>,
+    }
+
+    impl CustomWindowHandler for DelegateProbe {
+        fn set_handle(&mut self, _hwnd: HWND) {}
+        fn on_destroy(&mut self) {}
+        // handle_message は未オーバーライド(既定で on_message に委譲する)。
+        fn on_message(&mut self, _hwnd: HWND, msg: u32, _w: WPARAM, _l: LPARAM) -> LRESULT {
+            self.on_message_msg = Some(msg);
+            LRESULT(42)
+        }
+    }
+
+    #[test]
+    fn test_handle_message_delegates_to_on_message() {
+        let mut h = DelegateProbe { on_message_msg: None };
+        let r = h.handle_message(HWND::default(), 0x1234, WPARAM(0), LPARAM(0));
+        // 既定の handle_message は on_message へ委譲する。
+        assert_eq!(r.0, 42);
+        assert_eq!(h.on_message_msg, Some(0x1234));
+    }
+
+    // --- CPopupWindow: ダークモード状態遷移 ---
+
+    #[test]
+    fn test_popup_dark_mode_default() {
+        let s = PopupDarkModeState::new();
+        assert!(!s.allow_dark_mode);
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_on_create_allow_fail() {
+        // SetWindowAllowDarkMode 失敗 → 何も変わらない。
+        let mut s = PopupDarkModeState::new();
+        s.on_create(false, true, true);
+        assert!(!s.allow_dark_mode);
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_on_create_light_mode() {
+        // allow 成功・ライトモード → allow のみ true。
+        let mut s = PopupDarkModeState::new();
+        s.on_create(true, false, true);
+        assert!(s.allow_dark_mode);
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_on_create_dark_mode() {
+        // allow 成功・ダーク・フレーム設定成功 → 両方 true。
+        let mut s = PopupDarkModeState::new();
+        s.on_create(true, true, true);
+        assert!(s.allow_dark_mode);
+        assert!(s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_on_create_dark_frame_fail() {
+        // allow 成功・ダークだがフレーム設定失敗 → dark は false のまま。
+        let mut s = PopupDarkModeState::new();
+        s.on_create(true, true, false);
+        assert!(s.allow_dark_mode);
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_setting_change_not_allowed() {
+        // allow していなければ設定変更は無視。
+        let mut s = PopupDarkModeState::new();
+        assert!(!s.on_setting_change(true, true, true));
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_setting_change_to_dark() {
+        // allow 済・設定変化・ダークへ・フレーム成功 → 切替成立。
+        let mut s = PopupDarkModeState { allow_dark_mode: true, dark_mode: false };
+        assert!(s.on_setting_change(true, true, true));
+        assert!(s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_setting_change_no_state_change() {
+        // 既に同じ状態(dark==is_dark)なら何も起きない。
+        let mut s = PopupDarkModeState { allow_dark_mode: true, dark_mode: true };
+        assert!(!s.on_setting_change(true, true, true));
+        assert!(s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_setting_change_setting_not_changed() {
+        // 設定そのものが変わっていない → false。
+        let mut s = PopupDarkModeState { allow_dark_mode: true, dark_mode: false };
+        assert!(!s.on_setting_change(false, true, true));
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_setting_change_frame_fail() {
+        // フレーム設定失敗 → 状態は変えない。
+        let mut s = PopupDarkModeState { allow_dark_mode: true, dark_mode: false };
+        assert!(!s.on_setting_change(true, true, false));
+        assert!(!s.dark_mode);
     }
 }
