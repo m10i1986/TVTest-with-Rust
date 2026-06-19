@@ -31,23 +31,27 @@
 #![cfg(windows)]
 
 use core::ffi::c_void;
+use core::ptr::{copy_nonoverlapping, null_mut};
 use std::mem::size_of;
 
 use windows::Win32::Foundation::{COLORREF, RECT};
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BitBlt, CreateBrushIndirect, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateDIBSection, CreateFontIndirectW, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
-    GetCurrentObject, GetDC, GetDCPenColor, GetObjectW, GetStockObject, GetTextFaceW,
-    GetTextMetricsW, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject, SetDCBrushColor,
-    SetDCPenColor, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN, DEFAULT_GUI_FONT, DIB_RGB_COLORS, FW_NORMAL,
-    GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
-    LOGBRUSH, LOGFONTW, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE, TEXTMETRICW, TRIVERTEX,
+    GetCurrentObject, GetDC, GetDCPenColor, GetDIBColorTable, GetObjectW, GetStockObject,
+    GetTextFaceW, GetTextMetricsW, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject,
+    SetDCBrushColor, SetDCPenColor, SetDIBColorTable, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN,
+    DEFAULT_GUI_FONT, DIBSECTION, DIB_RGB_COLORS, FW_NORMAL, GRADIENT_FILL_RECT_H,
+    GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGBRUSH, LOGFONTW,
+    OBJ_BITMAP, RGBQUAD, SRCCOPY, STRETCH_BLT_MODE, TEXTMETRICW, TRIVERTEX,
 };
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::WindowsAndMessaging::{
-    SystemParametersInfoW, FE_FONTSMOOTHINGCLEARTYPE, NONCLIENTMETRICSW, SPI_GETFONTSMOOTHING,
-    SPI_GETFONTSMOOTHINGTYPE, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    CopyImage, SystemParametersInfoW, FE_FONTSMOOTHINGCLEARTYPE, IMAGE_BITMAP, IMAGE_FLAGS,
+    NONCLIENTMETRICSW, SPI_GETFONTSMOOTHING, SPI_GETFONTSMOOTHINGTYPE, SPI_GETNONCLIENTMETRICS,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
 };
 
 use tvtest_dpi_util::mul_div;
@@ -1793,9 +1797,364 @@ impl Drop for Offscreen {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DIB(ビットマップ)自由関数と Bitmap ラッパー(DrawUtil.cpp / DrawUtil.h)
+// ---------------------------------------------------------------------------
+
+/// 32bpp 以下にも対応するパレット領域付きで DIB セクションを作る内部処理。
+///
+/// 成功時は `(HBITMAP, ピクセル先頭ポインタ)`。原実装 `CreateDIB`(DrawUtil.cpp:568)に対応。
+fn create_dib_with_bits(width: i32, height: i32, bit_count: u16) -> Option<(HBITMAP, *mut c_void)> {
+    // BITMAPINFOHEADER + 最大 256 エントリのパレット(原実装と同じ確保)。
+    #[repr(C)]
+    struct DibInfo256 {
+        header: BITMAPINFOHEADER,
+        colors: [RGBQUAD; 256],
+    }
+    let info = DibInfo256 {
+        header: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: height,
+            biPlanes: 1,
+            biBitCount: bit_count,
+            biCompression: 0, // BI_RGB
+            ..Default::default()
+        },
+        colors: [RGBQUAD::default(); 256],
+    };
+    let mut pbits: *mut c_void = null_mut();
+    // SAFETY: info は有効。CreateDIBSection が pbits にピクセル先頭を返す。
+    match unsafe {
+        CreateDIBSection(
+            None,
+            &info as *const DibInfo256 as *const BITMAPINFO,
+            DIB_RGB_COLORS,
+            &mut pbits,
+            None,
+            0,
+        )
+    } {
+        Ok(hbm) if !hbm.0.is_null() => Some((hbm, pbits)),
+        _ => None,
+    }
+}
+
+/// DIB セクションを作る。原実装 `CreateDIB`(DrawUtil.cpp:568)。
+pub fn create_dib(width: i32, height: i32, bit_count: u16) -> Option<HBITMAP> {
+    create_dib_with_bits(width, height, bit_count).map(|(hbm, _)| hbm)
+}
+
+/// DIB を複製する(パレットも複製)。原実装 `DuplicateDIB`(DrawUtil.cpp:591)。
+pub fn duplicate_dib(hbm_src: HBITMAP) -> Option<HBITMAP> {
+    if hbm_src.0.is_null() {
+        return None;
+    }
+    let mut bm = BITMAP::default();
+    // SAFETY: hbm_src は有効。BITMAP 情報を取得する。
+    let got = unsafe {
+        GetObjectW(
+            HGDIOBJ(hbm_src.0),
+            size_of::<BITMAP>() as i32,
+            Some(&mut bm as *mut BITMAP as *mut c_void),
+        )
+    };
+    if got != size_of::<BITMAP>() as i32 || bm.bmBits.is_null() {
+        return None;
+    }
+
+    let (hbm, pbits) = create_dib_with_bits(bm.bmWidth, bm.bmHeight, bm.bmBitsPixel)?;
+
+    // ピクセルをコピー。
+    let size = (bm.bmHeight * bm.bmWidthBytes) as usize;
+    // SAFETY: 双方とも size バイトの有効なバッファ。
+    unsafe {
+        copy_nonoverlapping(bm.bmBits as *const u8, pbits as *mut u8, size);
+    }
+
+    // 8bpp 以下はカラーテーブルもコピー。
+    if bm.bmBitsPixel <= 8 {
+        // SAFETY: 一時 DC を作りカラーテーブルを転送する。
+        unsafe {
+            let hdc = CreateCompatibleDC(None);
+            if hdc.0.is_null() {
+                let _ = DeleteObject(HGDIOBJ(hbm.0));
+                return None;
+            }
+            let count = 1u32 << bm.bmBitsPixel;
+            let mut table = [RGBQUAD::default(); 256];
+            let old = SelectObject(hdc, HGDIOBJ(hbm_src.0));
+            GetDIBColorTable(hdc, 0, &mut table[..count as usize]);
+            SelectObject(hdc, HGDIOBJ(hbm.0));
+            SetDIBColorTable(hdc, 0, &table[..count as usize]);
+            SelectObject(hdc, old);
+            let _ = DeleteDC(hdc);
+        }
+    }
+
+    Some(hbm)
+}
+
+/// ビットマップを拡縮した DIB を作る。原実装 `ResizeBitmap`(DrawUtil.cpp:627)。
+pub fn resize_bitmap(
+    hbm_src: HBITMAP,
+    width: i32,
+    height: i32,
+    bit_count: u16,
+    stretch_mode: STRETCH_BLT_MODE,
+) -> Option<HBITMAP> {
+    if hbm_src.0.is_null() || width < 1 || height == 0 {
+        return None;
+    }
+    let hbm = create_dib(width, height, bit_count)?;
+
+    // SAFETY: 一時 DC を 2 つ作り StretchBlt で転送する。
+    let ok = unsafe {
+        let hdc_src = CreateCompatibleDC(None);
+        let hdc_dst = CreateCompatibleDC(None);
+        let ok = !hdc_src.0.is_null() && !hdc_dst.0.is_null();
+        if ok {
+            let src_old = SelectObject(hdc_src, HGDIOBJ(hbm_src.0));
+            let dst_old = SelectObject(hdc_dst, HGDIOBJ(hbm.0));
+            let old_mode = SetStretchBltMode(hdc_dst, stretch_mode);
+            let mut bm = BITMAP::default();
+            let _ = GetObjectW(
+                HGDIOBJ(hbm_src.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            );
+            let _ = StretchBlt(
+                hdc_dst,
+                0,
+                0,
+                width,
+                height.abs(),
+                Some(hdc_src),
+                0,
+                0,
+                bm.bmWidth,
+                bm.bmHeight,
+                SRCCOPY,
+            );
+            SetStretchBltMode(hdc_dst, STRETCH_BLT_MODE(old_mode));
+            let _ = SelectObject(hdc_dst, dst_old);
+            let _ = SelectObject(hdc_src, src_old);
+        }
+        if !hdc_dst.0.is_null() {
+            let _ = DeleteDC(hdc_dst);
+        }
+        if !hdc_src.0.is_null() {
+            let _ = DeleteDC(hdc_src);
+        }
+        ok
+    };
+
+    if !ok {
+        // SAFETY: 失敗時は作成した DIB を破棄。
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+        }
+        return None;
+    }
+    Some(hbm)
+}
+
+/// ビットマップ(`HBITMAP`)の RAII ラッパー。原実装 `DrawUtil::CBitmap`(DrawUtil.h:161)。
+///
+/// `Drop`(`~CBitmap`)で破棄する。`Clone`(コピーコンストラクタ/代入、DrawUtil.cpp:1007)は
+/// DIB なら [`duplicate_dib`]、それ以外は `CopyImage` で複製する。
+pub struct Bitmap {
+    hbm: HBITMAP,
+}
+
+impl Bitmap {
+    /// 空のビットマップ(未生成)を作る。
+    pub fn new() -> Self {
+        Self {
+            hbm: HBITMAP::default(),
+        }
+    }
+
+    /// DIB を生成する。`CBitmap::Create`(DrawUtil.cpp:1021)。
+    pub fn create(&mut self, width: i32, height: i32, bit_count: u16) -> bool {
+        self.destroy();
+        match create_dib(width, height, bit_count) {
+            Some(hbm) => {
+                self.hbm = hbm;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `BITMAPINFO`(ヘッダ + パレット + ピクセル)のバイト列から生成する。
+    /// 原実装 `CBitmap::Create(const BITMAPINFO*, size_t)`(DrawUtil.cpp:1028)。
+    ///
+    /// `data` は先頭が `BITMAPINFOHEADER` の連続バッファ。情報部の後ろにピクセルがあればコピーする。
+    pub fn create_from_dib_data(&mut self, data: &[u8]) -> bool {
+        self.destroy();
+        if data.len() < size_of::<BITMAPINFOHEADER>() {
+            return false;
+        }
+        // SAFETY: data は十分な長さがあり、先頭は BITMAPINFOHEADER。
+        let header = unsafe { &*(data.as_ptr() as *const BITMAPINFOHEADER) };
+        let info_size = tvtest_util::calc_dib_info_size(
+            header.biSize,
+            header.biBitCount,
+            header.biCompression,
+        );
+        if info_size > data.len() {
+            return false;
+        }
+
+        let mut pbits: *mut c_void = null_mut();
+        // SAFETY: data 先頭を BITMAPINFO として渡す。
+        let hbm = match unsafe {
+            CreateDIBSection(
+                None,
+                data.as_ptr() as *const BITMAPINFO,
+                DIB_RGB_COLORS,
+                &mut pbits,
+                None,
+                0,
+            )
+        } {
+            Ok(h) if !h.0.is_null() => h,
+            _ => return false,
+        };
+
+        if data.len() > info_size {
+            let bits_size =
+                tvtest_util::calc_dib_bits_size(header.biWidth, header.biBitCount, header.biHeight);
+            if bits_size <= data.len() - info_size {
+                // SAFETY: コピー元/先とも bits_size バイト以上の有効領域。
+                unsafe {
+                    copy_nonoverlapping(data.as_ptr().add(info_size), pbits as *mut u8, bits_size);
+                }
+            }
+        }
+
+        self.hbm = hbm;
+        true
+    }
+
+    /// 既存ハンドルの所有権を受け取る。`CBitmap::Attach`(DrawUtil.cpp:1063)。
+    pub fn attach(&mut self, hbm: HBITMAP) -> bool {
+        if hbm.0.is_null() {
+            return false;
+        }
+        self.destroy();
+        self.hbm = hbm;
+        true
+    }
+
+    /// 生成済みかどうか。
+    pub fn is_created(&self) -> bool {
+        !self.hbm.0.is_null()
+    }
+
+    /// ビットマップを破棄する。`CBitmap::Destroy`(DrawUtil.cpp:1072)。
+    pub fn destroy(&mut self) {
+        if !self.hbm.0.is_null() {
+            // SAFETY: 自身が所有するビットマップ。
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.hbm.0));
+            }
+            self.hbm = HBITMAP::default();
+        }
+    }
+
+    /// ハンドルを取得する(`GetHandle`、DrawUtil.h:181)。
+    pub fn handle(&self) -> HBITMAP {
+        self.hbm
+    }
+
+    /// DIB セクションかどうか。`CBitmap::IsDIB`(DrawUtil.cpp:1080)。
+    pub fn is_dib(&self) -> bool {
+        if self.hbm.0.is_null() {
+            return false;
+        }
+        let mut ds = DIBSECTION::default();
+        // SAFETY: hbm は有効。DIBSECTION 取得可なら DIB。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm.0),
+                size_of::<DIBSECTION>() as i32,
+                Some(&mut ds as *mut DIBSECTION as *mut c_void),
+            )
+        };
+        got == size_of::<DIBSECTION>() as i32
+    }
+
+    /// 幅。`CBitmap::GetWidth`(DrawUtil.cpp:1090)。
+    pub fn width(&self) -> i32 {
+        self.bitmap_info().map_or(0, |bm| bm.bmWidth)
+    }
+
+    /// 高さ。`CBitmap::GetHeight`(DrawUtil.cpp:1100)。
+    pub fn height(&self) -> i32 {
+        self.bitmap_info().map_or(0, |bm| bm.bmHeight)
+    }
+
+    /// `BITMAP` 情報を取得する(内部)。
+    fn bitmap_info(&self) -> Option<BITMAP> {
+        if self.hbm.0.is_null() {
+            return None;
+        }
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm は有効。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got == size_of::<BITMAP>() as i32 {
+            Some(bm)
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for Bitmap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for Bitmap {
+    fn clone(&self) -> Self {
+        // CBitmap::operator=(DrawUtil.cpp:1007): DIB は DuplicateDIB、それ以外は CopyImage。
+        let mut bitmap = Self::new();
+        if !self.hbm.0.is_null() {
+            bitmap.hbm = if self.is_dib() {
+                duplicate_dib(self.hbm).unwrap_or_default()
+            } else {
+                // SAFETY: hbm は有効。CopyImage で複製。
+                match unsafe {
+                    CopyImage(HANDLE(self.hbm.0), IMAGE_BITMAP, 0, 0, IMAGE_FLAGS(0))
+                } {
+                    Ok(h) => HBITMAP(h.0),
+                    Err(_) => HBITMAP::default(),
+                }
+            };
+        }
+        bitmap
+    }
+}
+
+impl Drop for Bitmap {
+    fn drop(&mut self) {
+        self.destroy();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Graphics::Gdi::STRETCH_HALFTONE;
 
     // ----- RGBA -----
 
@@ -2439,5 +2798,96 @@ mod tests {
         assert!(!is_font_available(&bad, None));
         // 実在フォント名はパニックしないこと(可否は環境依存)。
         let _ = is_font_available(&log_font(-16, "Tahoma"), None);
+    }
+
+    // ----- Bitmap / DIB -----
+
+    #[test]
+    fn test_create_dib() {
+        let hbm = create_dib(16, 16, 32);
+        assert!(hbm.is_some());
+        // 後始末: Bitmap に attach して Drop で破棄。
+        let mut b = Bitmap::new();
+        assert!(b.attach(hbm.unwrap()));
+        assert!(b.is_created());
+    }
+
+    #[test]
+    fn test_bitmap_default_not_created() {
+        let b = Bitmap::new();
+        assert!(!b.is_created());
+    }
+
+    #[test]
+    fn test_bitmap_create_props() {
+        let mut b = Bitmap::new();
+        assert!(!b.is_created());
+        assert!(b.create(20, 10, 32));
+        assert!(b.is_created());
+        assert!(b.is_dib());
+        assert_eq!(b.width(), 20);
+        assert_eq!(b.height(), 10);
+    }
+
+    #[test]
+    fn test_bitmap_clone_dib() {
+        let mut b = Bitmap::new();
+        assert!(b.create(8, 8, 32));
+        let c = b.clone();
+        assert!(c.is_created());
+        assert!(c.is_dib());
+        assert_eq!(c.width(), 8);
+        assert_eq!(c.height(), 8);
+    }
+
+    #[test]
+    fn test_duplicate_dib() {
+        let mut b = Bitmap::new();
+        assert!(b.create(8, 4, 32));
+        let dup = duplicate_dib(b.handle());
+        assert!(dup.is_some());
+        let mut d = Bitmap::new();
+        d.attach(dup.unwrap());
+        assert_eq!(d.width(), 8);
+        assert_eq!(d.height(), 4);
+    }
+
+    #[test]
+    fn test_resize_bitmap() {
+        let mut b = Bitmap::new();
+        assert!(b.create(8, 8, 32));
+        let resized = resize_bitmap(b.handle(), 16, 16, 24, STRETCH_HALFTONE);
+        assert!(resized.is_some());
+        let mut r = Bitmap::new();
+        r.attach(resized.unwrap());
+        assert_eq!(r.width(), 16);
+        assert_eq!(r.height(), 16);
+    }
+
+    #[test]
+    fn test_create_from_dib_data() {
+        // 2x2 32bpp DIB: BITMAPINFOHEADER(40) + 2*2*4=16 バイト。
+        let mut data = vec![0u8; 40 + 16];
+        data[0..4].copy_from_slice(&40u32.to_le_bytes()); // biSize
+        data[4..8].copy_from_slice(&2i32.to_le_bytes()); // biWidth
+        data[8..12].copy_from_slice(&2i32.to_le_bytes()); // biHeight
+        data[12..14].copy_from_slice(&1u16.to_le_bytes()); // biPlanes
+        data[14..16].copy_from_slice(&32u16.to_le_bytes()); // biBitCount
+                                                            // biCompression = 0 (BI_RGB)
+        let mut b = Bitmap::new();
+        assert!(b.create_from_dib_data(&data));
+        assert!(b.is_created());
+        assert_eq!(b.width(), 2);
+        assert_eq!(b.height(), 2);
+    }
+
+    #[test]
+    fn test_dib_free_functions_invalid() {
+        assert!(duplicate_dib(HBITMAP::default()).is_none());
+        assert!(resize_bitmap(HBITMAP::default(), 10, 10, 24, STRETCH_HALFTONE).is_none());
+        // 幅・高さ不正。
+        let mut b = Bitmap::new();
+        assert!(b.create(8, 8, 32));
+        assert!(resize_bitmap(b.handle(), 0, 10, 24, STRETCH_HALFTONE).is_none());
     }
 }
