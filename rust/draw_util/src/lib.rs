@@ -36,14 +36,19 @@ use std::mem::size_of;
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BitBlt, CreateBrushIndirect, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetCurrentObject, GetDC,
-    GetDCPenColor, GetObjectW, GetStockObject, GradientFill, LineTo, MoveToEx, ReleaseDC,
-    SelectObject, SetDCBrushColor, SetDCPenColor, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
-    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN, DIB_RGB_COLORS,
-    GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HGDIOBJ,
-    LOGBRUSH, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE, TRIVERTEX,
+    CreateDIBSection, CreateFontIndirectW, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
+    GetCurrentObject, GetDC, GetDCPenColor, GetObjectW, GetStockObject, GetTextFaceW,
+    GetTextMetricsW, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject, SetDCBrushColor,
+    SetDCPenColor, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+    BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN, DEFAULT_GUI_FONT, DIB_RGB_COLORS, FW_NORMAL,
+    GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
+    LOGBRUSH, LOGFONTW, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE, TEXTMETRICW, TRIVERTEX,
 };
 use windows::Win32::UI::Controls::MARGINS;
+use windows::Win32::UI::WindowsAndMessaging::{
+    SystemParametersInfoW, FE_FONTSMOOTHINGCLEARTYPE, NONCLIENTMETRICSW, SPI_GETFONTSMOOTHING,
+    SPI_GETFONTSMOOTHINGTYPE, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+};
 
 use tvtest_dpi_util::mul_div;
 use tvtest_util::mix_color;
@@ -873,6 +878,481 @@ pub fn color_overlay(hdc: HDC, rect: &RECT, color: u32, opacity: u8) -> bool {
     }
 
     alpha_blend_overlay_dib(hdc, rect, width, height, hbm, opacity, false)
+}
+
+// ---------------------------------------------------------------------------
+// フォント(DrawUtil.cpp / DrawUtil.h)
+// ---------------------------------------------------------------------------
+
+/// システムフォントの種別。原実装 `DrawUtil::FontType`(DrawUtil.h:100)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontType {
+    /// メッセージフォント
+    Message,
+    /// メニューフォント
+    Menu,
+    /// キャプションフォント
+    Caption,
+    /// 小キャプションフォント
+    SmallCaption,
+    /// ステータスフォント
+    Status,
+}
+
+/// NUL 終端ワイド文字列の長さ(NUL を含まない)。
+fn wide_len(s: &[u16]) -> usize {
+    s.iter().position(|&c| c == 0).unwrap_or(s.len())
+}
+
+/// ASCII 大文字を小文字へ。
+fn to_lower16(c: u16) -> u16 {
+    if (b'A' as u16..=b'Z' as u16).contains(&c) {
+        c + 32
+    } else {
+        c
+    }
+}
+
+/// 2つの NUL 終端ワイド文字列を大小区別ありで比較(`lstrcmp` 相当)。
+fn wide_eq(a: &[u16], b: &[u16]) -> bool {
+    let la = wide_len(a);
+    let lb = wide_len(b);
+    la == lb && a[..la] == b[..lb]
+}
+
+/// NUL 終端ワイド文字列を `str` と大小区別ありで比較(`lstrcmp` 相当)。
+fn wide_eq_str(wide: &[u16], s: &str) -> bool {
+    wide[..wide_len(wide)].iter().copied().eq(s.encode_utf16())
+}
+
+/// NUL 終端ワイド文字列を `str` と ASCII 大小無視で比較(`lstrcmpi` 相当)。
+fn wide_eq_str_ci(wide: &[u16], s: &str) -> bool {
+    let w = &wide[..wide_len(wide)];
+    let s16: Vec<u16> = s.encode_utf16().collect();
+    w.len() == s16.len()
+        && w.iter()
+            .zip(s16.iter())
+            .all(|(&a, &b)| to_lower16(a) == to_lower16(b))
+}
+
+/// NUL 終端ワイド文字列同士を ASCII 大小無視で比較(`lstrcmpi` 相当)。
+fn wide_eq_ci(a: &[u16], b: &[u16]) -> bool {
+    let la = wide_len(a);
+    let lb = wide_len(b);
+    la == lb
+        && a[..la]
+            .iter()
+            .zip(b[..lb].iter())
+            .all(|(&x, &y)| to_lower16(x) == to_lower16(y))
+}
+
+/// `LOGFONTW.lfFaceName` に face 名を設定する(NUL 終端、容量超過は切り詰め)。
+fn set_face_name(log_font: &mut LOGFONTW, name: &str) {
+    let src: Vec<u16> = name.encode_utf16().collect();
+    let cap = log_font.lfFaceName.len();
+    let n = src.len().min(cap - 1);
+    for c in log_font.lfFaceName.iter_mut() {
+        *c = 0;
+    }
+    log_font.lfFaceName[..n].copy_from_slice(&src[..n]);
+}
+
+/// 2つの `LOGFONTW` を比較する。原実装 `CompareLogFont`(Util.cpp:589)。
+///
+/// 数値フィールド(`lfFaceName` 直前までの 28 バイト相当)を比較し、`lfFaceName` を
+/// 大小区別あり(`lstrcmp`)で比較する。Win32 型を扱うため tvtest_util ではなく本クレートに置く。
+fn compare_log_font(f1: &LOGFONTW, f2: &LOGFONTW) -> bool {
+    f1.lfHeight == f2.lfHeight
+        && f1.lfWidth == f2.lfWidth
+        && f1.lfEscapement == f2.lfEscapement
+        && f1.lfOrientation == f2.lfOrientation
+        && f1.lfWeight == f2.lfWeight
+        && f1.lfItalic == f2.lfItalic
+        && f1.lfUnderline == f2.lfUnderline
+        && f1.lfStrikeOut == f2.lfStrikeOut
+        && f1.lfCharSet == f2.lfCharSet
+        && f1.lfOutPrecision == f2.lfOutPrecision
+        && f1.lfClipPrecision == f2.lfClipPrecision
+        && f1.lfQuality == f2.lfQuality
+        && f1.lfPitchAndFamily == f2.lfPitchAndFamily
+        && wide_eq(&f1.lfFaceName, &f2.lfFaceName)
+}
+
+/// `NONCLIENTMETRICS` の `cbSize`。原実装 `CCSIZEOF_STRUCT(NONCLIENTMETRICS, lfMessageFont)`
+/// (DrawUtil.cpp:715)= `lfMessageFont` までを含むサイズ(`iPaddedBorderWidth` を除く)。
+fn nonclientmetrics_cbsize() -> u32 {
+    (core::mem::offset_of!(NONCLIENTMETRICSW, lfMessageFont) + size_of::<LOGFONTW>()) as u32
+}
+
+/// 種別に対応する `NONCLIENTMETRICS` のフォントを返す。原実装 `GetNonClientFont`(DrawUtil.cpp:694)。
+fn get_nonclient_font(ncm: &NONCLIENTMETRICSW, font_type: FontType) -> &LOGFONTW {
+    match font_type {
+        FontType::Message => &ncm.lfMessageFont,
+        FontType::Menu => &ncm.lfMenuFont,
+        FontType::Caption => &ncm.lfCaptionFont,
+        FontType::SmallCaption => &ncm.lfSmCaptionFont,
+        FontType::Status => &ncm.lfStatusFont,
+    }
+}
+
+/// システムフォントを取得する。原実装 `GetSystemFont`(DrawUtil.cpp:709)。
+pub fn get_system_font(font_type: FontType) -> Option<LOGFONTW> {
+    let mut ncm = NONCLIENTMETRICSW {
+        cbSize: nonclientmetrics_cbsize(),
+        ..Default::default()
+    };
+    // SAFETY: ncm は有効なバッファ。SPI_GETNONCLIENTMETRICS が値を書き込む。
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            ncm.cbSize,
+            Some(&mut ncm as *mut NONCLIENTMETRICSW as *mut c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    if ok.is_err() {
+        return None;
+    }
+    Some(*get_nonclient_font(&ncm, font_type))
+}
+
+/// DPI を指定してシステムフォントを取得する。原実装 `GetSystemFontWithDPI`(DrawUtil.cpp:730)。
+///
+/// DPI 対応 API が無い環境では非対応版で取得し、`lfHeight` を DPI でスケールする。
+pub fn get_system_font_with_dpi(font_type: FontType, dpi: i32) -> Option<LOGFONTW> {
+    let mut need_scaling = false;
+    let mut ncm = NONCLIENTMETRICSW {
+        cbSize: nonclientmetrics_cbsize(),
+        ..Default::default()
+    };
+    // SAFETY: ncm は有効なバッファ。
+    let ok = unsafe {
+        tvtest_dpi_util::system_parameters_info_with_dpi(
+            SPI_GETNONCLIENTMETRICS.0,
+            ncm.cbSize,
+            &mut ncm as *mut NONCLIENTMETRICSW as *mut c_void,
+            0,
+            dpi,
+        )
+    };
+    if !ok {
+        // SAFETY: 同上。
+        let r = unsafe {
+            SystemParametersInfoW(
+                SPI_GETNONCLIENTMETRICS,
+                ncm.cbSize,
+                Some(&mut ncm as *mut NONCLIENTMETRICSW as *mut c_void),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        };
+        if r.is_err() {
+            return None;
+        }
+        need_scaling = true;
+    }
+
+    let mut log_font = *get_nonclient_font(&ncm, font_type);
+    if need_scaling {
+        let system_dpi = tvtest_dpi_util::get_system_dpi();
+        let denom = if system_dpi != 0 { system_dpi } else { 96 };
+        log_font.lfHeight = mul_div(log_font.lfHeight, dpi, denom);
+    }
+    Some(log_font)
+}
+
+/// UI 用の既定フォントを取得する。原実装 `GetDefaultUIFont`(DrawUtil.cpp:761)。
+///
+/// メイリオは行間が空きすぎるため Meiryo UI に差し替える。
+pub fn get_default_ui_font() -> Option<LOGFONTW> {
+    let mut font = LOGFONTW::default();
+    if let Some(message_font) = get_system_font(FontType::Message) {
+        if wide_eq_str(&message_font.lfFaceName, "メイリオ")
+            || wide_eq_str_ci(&message_font.lfFaceName, "Meiryo")
+        {
+            font.lfHeight = -message_font.lfHeight.abs();
+            font.lfWeight = FW_NORMAL.0 as i32;
+            set_face_name(&mut font, "Meiryo UI");
+            if is_font_available(&font, None) {
+                return Some(font);
+            }
+        } else {
+            return Some(message_font);
+        }
+    }
+
+    // フォールバック: DEFAULT_GUI_FONT。
+    // 原実装(DrawUtil.cpp:785)はこのフォールバックの戻り値が反転している(通常到達しない)が、
+    // ここでは取得成功時に Some を返す。
+    // SAFETY: font は有効なバッファ。
+    let got = unsafe {
+        GetObjectW(
+            GetStockObject(DEFAULT_GUI_FONT),
+            size_of::<LOGFONTW>() as i32,
+            Some(&mut font as *mut LOGFONTW as *mut c_void),
+        )
+    };
+    if got == size_of::<LOGFONTW>() as i32 {
+        Some(font)
+    } else {
+        None
+    }
+}
+
+/// 指定フォントが利用可能か(実体が同名で選択されるか)。原実装 `IsFontAvailable`(DrawUtil.cpp:789)。
+///
+/// `hdc` が `None` のときは一時メモリ DC を使う。
+pub fn is_font_available(font: &LOGFONTW, hdc: Option<HDC>) -> bool {
+    // SAFETY: font は有効。失敗時 NULL。
+    let hfont = unsafe { CreateFontIndirectW(font) };
+    if hfont.0.is_null() {
+        return false;
+    }
+
+    let (work_hdc, mem_dc) = match hdc {
+        Some(h) if !h.0.is_null() => (h, None),
+        _ => {
+            // SAFETY: 失敗時 NULL。
+            let m = unsafe { CreateCompatibleDC(None) };
+            if m.0.is_null() {
+                // 原実装はここで hfont を解放しないが(リーク)、本移植では解放する。
+                unsafe {
+                    let _ = DeleteObject(HGDIOBJ(hfont.0));
+                }
+                return false;
+            }
+            (m, Some(m))
+        }
+    };
+
+    // SAFETY: work_hdc/hfont は有効。
+    let available = unsafe {
+        let old = SelectObject(work_hdc, HGDIOBJ(hfont.0));
+        let mut face = [0u16; 32]; // LF_FACESIZE
+        let len = GetTextFaceW(work_hdc, Some(&mut face));
+        let result = len > 0 && wide_eq_ci(&face, &font.lfFaceName);
+        let _ = SelectObject(work_hdc, old);
+        result
+    };
+
+    // SAFETY: 一時 DC とフォントを破棄する(原実装は hfont を解放しないが本移植では解放)。
+    unsafe {
+        if let Some(m) = mem_dc {
+            let _ = DeleteDC(m);
+        }
+        let _ = DeleteObject(HGDIOBJ(hfont.0));
+    }
+
+    available
+}
+
+/// フォントスムージングが有効か。原実装 `IsFontSmoothingEnabled`(DrawUtil.cpp:815)。
+pub fn is_font_smoothing_enabled() -> bool {
+    let mut enabled: i32 = 0;
+    // SAFETY: enabled は有効なバッファ。
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETFONTSMOOTHING,
+            0,
+            Some(&mut enabled as *mut i32 as *mut c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok();
+    ok && enabled != 0
+}
+
+/// ClearType が有効か。原実装 `IsClearTypeEnabled`(DrawUtil.cpp:822)。
+pub fn is_clear_type_enabled() -> bool {
+    if !is_font_smoothing_enabled() {
+        return false;
+    }
+    let mut smoothing_type: u32 = 0;
+    // SAFETY: smoothing_type は有効なバッファ。
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETFONTSMOOTHINGTYPE,
+            0,
+            Some(&mut smoothing_type as *mut u32 as *mut c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok();
+    ok && smoothing_type == FE_FONTSMOOTHINGCLEARTYPE
+}
+
+/// フォント(`HFONT`)の RAII ラッパー。原実装 `DrawUtil::CFont`(DrawUtil.h:115)。
+///
+/// `Drop`(`~CFont`)で破棄する。`Clone`(コピーコンストラクタ/代入)は `LOGFONT` を取得して
+/// 作り直す(DrawUtil.cpp:851)。`PartialEq` は `CompareLogFont` による比較(DrawUtil.cpp:866)。
+pub struct Font {
+    hfont: HFONT,
+}
+
+impl Font {
+    /// 空のフォント(未生成)を作る。
+    pub fn new() -> Self {
+        Self {
+            hfont: HFONT::default(),
+        }
+    }
+
+    /// `LOGFONT` から生成する(`CFont(const LOGFONT&)`、DrawUtil.cpp:836)。
+    pub fn from_log_font(log_font: &LOGFONTW) -> Self {
+        let mut font = Self::new();
+        font.create(log_font);
+        font
+    }
+
+    /// 種別から生成する(`CFont(FontType)`、DrawUtil.cpp:841)。
+    pub fn from_font_type(font_type: FontType) -> Self {
+        let mut font = Self::new();
+        font.create_from_type(font_type);
+        font
+    }
+
+    /// `LOGFONT` からフォントを生成する。`CFont::Create`(DrawUtil.cpp:878)。
+    pub fn create(&mut self, log_font: &LOGFONTW) -> bool {
+        // SAFETY: log_font は有効。失敗時 NULL。
+        let hfont = unsafe { CreateFontIndirectW(log_font) };
+        if hfont.0.is_null() {
+            return false;
+        }
+        if !self.hfont.0.is_null() {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.hfont.0));
+            }
+        }
+        self.hfont = hfont;
+        true
+    }
+
+    /// 種別からフォントを生成する。`CFont::Create(FontType)`(DrawUtil.cpp:891)。
+    pub fn create_from_type(&mut self, font_type: FontType) -> bool {
+        match get_system_font(font_type) {
+            Some(log_font) => self.create(&log_font),
+            None => false,
+        }
+    }
+
+    /// 生成済みかどうか。
+    pub fn is_created(&self) -> bool {
+        !self.hfont.0.is_null()
+    }
+
+    /// フォントを破棄する。`CFont::Destroy`(DrawUtil.cpp:900)。
+    pub fn destroy(&mut self) {
+        if !self.hfont.0.is_null() {
+            // SAFETY: 自身が所有するフォント。
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.hfont.0));
+            }
+            self.hfont = HFONT::default();
+        }
+    }
+
+    /// ハンドルを取得する(`GetHandle`、DrawUtil.h:134)。
+    pub fn handle(&self) -> HFONT {
+        self.hfont
+    }
+
+    /// `LOGFONT` を取得する。`CFont::GetLogFont`(DrawUtil.cpp:908)。
+    pub fn get_log_font(&self) -> Option<LOGFONTW> {
+        if self.hfont.0.is_null() {
+            return None;
+        }
+        let mut log_font = LOGFONTW::default();
+        // SAFETY: hfont は有効、log_font は LOGFONTW 用バッファ。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hfont.0),
+                size_of::<LOGFONTW>() as i32,
+                Some(&mut log_font as *mut LOGFONTW as *mut c_void),
+            )
+        };
+        if got == size_of::<LOGFONTW>() as i32 {
+            Some(log_font)
+        } else {
+            None
+        }
+    }
+
+    /// 高さを取得する。`CFont::GetHeight`(DrawUtil.cpp:915)。
+    ///
+    /// DC を作れない場合は `|lfHeight|` を返す。
+    pub fn get_height(&self, cell: bool) -> i32 {
+        if self.hfont.0.is_null() {
+            return 0;
+        }
+        // SAFETY: 失敗時 NULL。
+        let hdc = unsafe { CreateCompatibleDC(None) };
+        if hdc.0.is_null() {
+            return self.get_log_font().map_or(0, |lf| lf.lfHeight.abs());
+        }
+        let height = self.get_height_dc(hdc, cell);
+        // SAFETY: 自身が作った DC。
+        unsafe {
+            let _ = DeleteDC(hdc);
+        }
+        height
+    }
+
+    /// DC を指定して高さを取得する。`CFont::GetHeight(HDC)`(DrawUtil.cpp:934)。
+    pub fn get_height_dc(&self, hdc: HDC, cell: bool) -> i32 {
+        if self.hfont.0.is_null() || hdc.0.is_null() {
+            return 0;
+        }
+        // SAFETY: hfont/hdc は有効。
+        let mut tm = TEXTMETRICW::default();
+        unsafe {
+            let old = SelectObject(hdc, HGDIOBJ(self.hfont.0));
+            let _ = GetTextMetricsW(hdc, &mut tm);
+            let _ = SelectObject(hdc, old);
+        }
+        let mut height = tm.tmHeight;
+        if !cell {
+            height -= tm.tmInternalLeading;
+        }
+        height
+    }
+}
+
+impl Default for Font {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for Font {
+    fn clone(&self) -> Self {
+        // CFont::operator=(DrawUtil.cpp:851): LOGFONT を取得して作り直す。
+        let mut font = Self::new();
+        if let Some(log_font) = self.get_log_font() {
+            font.create(&log_font);
+        }
+        font
+    }
+}
+
+impl PartialEq for Font {
+    fn eq(&self, other: &Self) -> bool {
+        // CFont::operator==(DrawUtil.cpp:866)
+        if self.hfont.0.is_null() {
+            return other.hfont.0.is_null();
+        }
+        if other.hfont.0.is_null() {
+            return false;
+        }
+        match (self.get_log_font(), other.get_log_font()) {
+            (Some(a), Some(b)) => compare_log_font(&a, &b),
+            _ => false,
+        }
+    }
+}
+
+impl Drop for Font {
+    fn drop(&mut self) {
+        self.destroy();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1857,5 +2337,107 @@ mod tests {
             bottom: 0,
         };
         assert!(!color_overlay(off.dc(), &empty, 0x0000_00FF, 128));
+    }
+
+    // ----- フォント -----
+
+    fn log_font(height: i32, face: &str) -> LOGFONTW {
+        let mut lf = LOGFONTW {
+            lfHeight: height,
+            ..Default::default()
+        };
+        set_face_name(&mut lf, face);
+        lf
+    }
+
+    #[test]
+    fn test_set_face_name_and_wide_eq() {
+        let lf = log_font(-16, "Meiryo UI");
+        assert!(wide_eq_str(&lf.lfFaceName, "Meiryo UI"));
+        assert!(!wide_eq_str(&lf.lfFaceName, "Meiryo"));
+        assert!(wide_eq_str_ci(&lf.lfFaceName, "meiryo ui"));
+    }
+
+    #[test]
+    fn test_compare_log_font() {
+        let a = log_font(-16, "Tahoma");
+        let b = log_font(-16, "Tahoma");
+        assert!(compare_log_font(&a, &b));
+        // 高さ違い
+        let c = log_font(-17, "Tahoma");
+        assert!(!compare_log_font(&a, &c));
+        // face 違い(大小区別あり)
+        let d = log_font(-16, "tahoma");
+        assert!(!compare_log_font(&a, &d));
+    }
+
+    #[test]
+    fn test_font_default_not_created() {
+        let f = Font::new();
+        assert!(!f.is_created());
+        // null 同士は等しい。
+        assert!(f == Font::new());
+    }
+
+    #[test]
+    fn test_font_create_clone_eq() {
+        let lf = log_font(-16, "Tahoma");
+        let f = Font::from_log_font(&lf);
+        assert!(f.is_created());
+        let g = f.clone();
+        assert!(g.is_created());
+        // 同一 LOGFONT 由来なので等しい。
+        assert!(f == g);
+        // null とは等しくない。
+        assert!(f != Font::new());
+    }
+
+    #[test]
+    fn test_font_get_log_font_roundtrip() {
+        let lf = log_font(-20, "Tahoma");
+        let f = Font::from_log_font(&lf);
+        let got = f.get_log_font().unwrap();
+        assert_eq!(got.lfHeight, -20);
+        assert!(wide_eq_str(&got.lfFaceName, "Tahoma"));
+    }
+
+    #[test]
+    fn test_font_get_height_positive() {
+        let f = Font::from_log_font(&log_font(-16, "Tahoma"));
+        assert!(f.get_height(true) > 0);
+    }
+
+    #[test]
+    fn test_get_system_font() {
+        // システムフォントが取得でき、Font も生成できる。
+        assert!(get_system_font(FontType::Message).is_some());
+        assert!(get_system_font(FontType::Menu).is_some());
+        let f = Font::from_font_type(FontType::Message);
+        assert!(f.is_created());
+    }
+
+    #[test]
+    fn test_get_system_font_with_dpi() {
+        assert!(get_system_font_with_dpi(FontType::Message, 96).is_some());
+    }
+
+    #[test]
+    fn test_get_default_ui_font() {
+        assert!(get_default_ui_font().is_some());
+    }
+
+    #[test]
+    fn test_font_smoothing_queries_do_not_panic() {
+        let _ = is_font_smoothing_enabled();
+        let _ = is_clear_type_enabled();
+    }
+
+    #[test]
+    fn test_is_font_available() {
+        // 存在しないフォント名は GDI が別フォントに置換するため false。
+        let bad = log_font(-16, "NoSuchFontXYZ123");
+        assert!(!is_font_available(&bad, None));
+        // 実在フォント名はパニックしないこと(可否は環境依存)。
+        let _ = is_font_available(&log_font(-16, "Tahoma"), None);
     }
 }
