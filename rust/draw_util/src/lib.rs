@@ -36,11 +36,12 @@ use std::mem::size_of;
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BitBlt, CreateBrushIndirect, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetCurrentObject, GetDC, GetDCPenColor,
-    GetObjectW, GetStockObject, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject,
-    SetDCBrushColor, SetDCPenColor, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER,
-    BLENDFUNCTION, DC_BRUSH, DC_PEN, GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT,
-    HBITMAP, HBRUSH, HDC, HGDIOBJ, LOGBRUSH, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE, TRIVERTEX,
+    CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetCurrentObject, GetDC,
+    GetDCPenColor, GetObjectW, GetStockObject, GradientFill, LineTo, MoveToEx, ReleaseDC,
+    SelectObject, SetDCBrushColor, SetDCPenColor, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN, DIB_RGB_COLORS,
+    GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HGDIOBJ,
+    LOGBRUSH, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE, TRIVERTEX,
 };
 use windows::Win32::UI::Controls::MARGINS;
 
@@ -613,6 +614,265 @@ pub fn fill_border_width(
         bottom: border.bottom - border_width,
     };
     fill_border_color(hdc, border, &empty, paint, color)
+}
+
+/// アルファ付き2色のグラデーションで塗りつぶす。原実装 `FillGradient`(RGBA 版、DrawUtil.cpp:125)。
+///
+/// 両端が不透明なら COLORREF 版へ委譲する。半透明を含む場合は一時ビットマップに不透明グラデを描き、
+/// 列/行ごとに `AlphaBlend`(`SourceConstantAlpha` を [`blend_alpha`] で補間)して合成する。
+pub fn fill_gradient_rgba(
+    hdc: HDC,
+    rect: &RECT,
+    color1: Rgba,
+    color2: Rgba,
+    direction: FillDirection,
+) -> bool {
+    if hdc.0.is_null() || rect.left >= rect.right || rect.top >= rect.bottom {
+        return false;
+    }
+
+    // 両端不透明なら COLORREF 版で十分。
+    if color1.alpha == 255 && color2.alpha == 255 {
+        return fill_gradient(hdc, rect, color1.to_colorref(), color2.to_colorref(), direction);
+    }
+
+    // 対称方向は半分ずつ色を入れ替えて再帰する。
+    if direction.is_mirror() {
+        let mut rc = *rect;
+        if direction == FillDirection::HorzMirror {
+            rc.right = (rect.left + rect.right) / 2;
+            if rc.right > rc.left {
+                fill_gradient_rgba(hdc, &rc, color1, color2, FillDirection::Horz);
+                rc.left = rc.right;
+            }
+            rc.right = rect.right;
+            fill_gradient_rgba(hdc, &rc, color2, color1, FillDirection::Horz);
+        } else {
+            rc.bottom = (rect.top + rect.bottom) / 2;
+            if rc.bottom > rc.top {
+                fill_gradient_rgba(hdc, &rc, color1, color2, FillDirection::Vert);
+                rc.top = rc.bottom;
+            }
+            rc.bottom = rect.bottom;
+            fill_gradient_rgba(hdc, &rc, color2, color1, FillDirection::Vert);
+        }
+        return true;
+    }
+
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+
+    // SAFETY: hdc は有効。一時ビットマップに不透明グラデを描いて列/行ごとに合成する。
+    unsafe {
+        let hbm = CreateCompatibleBitmap(hdc, width, height);
+        if hbm.0.is_null() {
+            return false;
+        }
+        let hdc_mem = CreateCompatibleDC(Some(hdc));
+        let old_bmp = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
+
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        fill_gradient(hdc_mem, &rc, color1.to_colorref(), color2.to_colorref(), direction);
+
+        if direction == FillDirection::Horz {
+            for x in 0..width {
+                let alpha = blend_alpha(color1.alpha as i32, color2.alpha as i32, x, width - 1);
+                if alpha != 0 {
+                    let bf = BLENDFUNCTION {
+                        BlendOp: AC_SRC_OVER as u8,
+                        BlendFlags: 0,
+                        SourceConstantAlpha: alpha,
+                        AlphaFormat: 0,
+                    };
+                    let _ = AlphaBlend(
+                        hdc,
+                        x + rect.left,
+                        rect.top,
+                        1,
+                        height,
+                        hdc_mem,
+                        x,
+                        0,
+                        1,
+                        height,
+                        bf,
+                    );
+                }
+            }
+        } else {
+            for y in 0..height {
+                let alpha = blend_alpha(color1.alpha as i32, color2.alpha as i32, y, height - 1);
+                if alpha != 0 {
+                    let bf = BLENDFUNCTION {
+                        BlendOp: AC_SRC_OVER as u8,
+                        BlendFlags: 0,
+                        SourceConstantAlpha: alpha,
+                        AlphaFormat: 0,
+                    };
+                    let _ = AlphaBlend(
+                        hdc,
+                        rect.left,
+                        y + rect.top,
+                        width,
+                        1,
+                        hdc_mem,
+                        0,
+                        y,
+                        width,
+                        1,
+                        bf,
+                    );
+                }
+            }
+        }
+
+        let _ = SelectObject(hdc_mem, old_bmp);
+        let _ = DeleteDC(hdc_mem);
+        let _ = DeleteObject(HGDIOBJ(hbm.0));
+    }
+    true
+}
+
+/// 32bpp トップダウン DIB セクションを作る共通処理。失敗時は `None`。
+///
+/// 成功時は `(HBITMAP, ピクセル先頭ポインタ)` を返す。
+fn create_overlay_dib(width: i32, height: i32) -> Option<(HBITMAP, *mut c_void)> {
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut pbits: *mut c_void = core::ptr::null_mut();
+    // SAFETY: bmi/pbits は有効。CreateDIBSection が pbits にピクセル先頭を返す。
+    match unsafe { CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut pbits, None, 0) } {
+        Ok(hbm) if !hbm.0.is_null() && !pbits.is_null() => Some((hbm, pbits)),
+        _ => None,
+    }
+}
+
+/// DIB を premultiplied/定数アルファで `hdc` に重ねて破棄する共通処理。
+fn alpha_blend_overlay_dib(
+    hdc: HDC,
+    rect: &RECT,
+    width: i32,
+    height: i32,
+    hbm: HBITMAP,
+    source_constant_alpha: u8,
+    premultiplied: bool,
+) -> bool {
+    // SAFETY: hbm は有効。メモリ DC に選択してアルファ合成し、確実に破棄する。
+    unsafe {
+        let hdc_mem = CreateCompatibleDC(Some(hdc));
+        if hdc_mem.0.is_null() {
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            return false;
+        }
+        let hbm_old = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
+        let bf = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: source_constant_alpha,
+            AlphaFormat: if premultiplied { AC_SRC_ALPHA as u8 } else { 0 },
+        };
+        let _ = AlphaBlend(
+            hdc, rect.left, rect.top, width, height, hdc_mem, 0, 0, width, height, bf,
+        );
+        let _ = SelectObject(hdc_mem, hbm_old);
+        let _ = DeleteDC(hdc_mem);
+        let _ = DeleteObject(HGDIOBJ(hbm.0));
+    }
+    true
+}
+
+/// 光沢(上半分=ハイライト・下半分=シャドウ)を重ねる。原実装 `GlossOverlay`(DrawUtil.cpp:305)。
+pub fn gloss_overlay(
+    hdc: HDC,
+    rect: &RECT,
+    highlight1: i32,
+    highlight2: i32,
+    shadow1: i32,
+    shadow2: i32,
+) -> bool {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+
+    let (hbm, pbits) = match create_overlay_dib(width, height) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let row_bytes = (width * 4) as usize;
+    let center = height / 2;
+    let base = pbits as *mut u8;
+
+    // 上半分: ハイライト(全バイト = アルファ → premultiplied で白を α 重ね)。
+    for y in 0..center {
+        let alpha = blend_alpha(highlight1, highlight2, y, center - 1);
+        // SAFETY: base は width*height*4 バイトの DIB。行内に収まる。
+        let row = unsafe { base.add(y as usize * row_bytes) };
+        for b in 0..row_bytes {
+            unsafe {
+                *row.add(b) = alpha;
+            }
+        }
+    }
+    // 下半分: シャドウ(アルファのみ → premultiplied で黒を α 重ね)。
+    for y in center..height {
+        let alpha = blend_alpha(shadow1, shadow2, y - center, height - center - 1);
+        // SAFETY: 同上。
+        let row = unsafe { base.add(y as usize * row_bytes) };
+        for x in 0..width {
+            let px = unsafe { row.add(x as usize * 4) };
+            unsafe {
+                *px = 0;
+                *px.add(1) = 0;
+                *px.add(2) = 0;
+                *px.add(3) = alpha;
+            }
+        }
+    }
+
+    alpha_blend_overlay_dib(hdc, rect, width, height, hbm, 255, true)
+}
+
+/// 単色を指定不透明度で重ねる。原実装 `ColorOverlay`(DrawUtil.cpp:360)。
+pub fn color_overlay(hdc: HDC, rect: &RECT, color: u32, opacity: u8) -> bool {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+
+    let (hbm, pbits) = match create_overlay_dib(width, height) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let pixel = color_overlay_pixel(color);
+    let count = (width * height) as usize;
+    let p = pbits as *mut u32;
+    for i in 0..count {
+        // SAFETY: p は width*height 個の u32 を持つ DIB。
+        unsafe {
+            *p.add(i) = pixel;
+        }
+    }
+
+    alpha_blend_overlay_dib(hdc, rect, width, height, hbm, opacity, false)
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,5 +1752,110 @@ mod tests {
             bottom: 30,
         };
         assert!(fill_border_width(off.dc(), &border, 3, None, 0x00FF_FFFF));
+    }
+
+    // ----- アルファ合成描画(オフスクリーンへの実描画スモーク) -----
+
+    #[test]
+    fn test_fill_gradient_rgba_opaque_delegates() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        // 両端不透明 → COLORREF 版へ委譲。Mirror は true。
+        assert!(fill_gradient_rgba(
+            off.dc(),
+            &rc,
+            Rgba::from_rgb(0, 0, 255),
+            Rgba::from_rgb(255, 0, 0),
+            FillDirection::HorzMirror
+        ));
+    }
+
+    #[test]
+    fn test_fill_gradient_rgba_translucent() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        // 半透明を含む → 一時ビットマップ経由で列/行合成。
+        assert!(fill_gradient_rgba(
+            off.dc(),
+            &rc,
+            Rgba::new(0, 0, 255, 0),
+            Rgba::new(255, 0, 0, 255),
+            FillDirection::Horz
+        ));
+        assert!(fill_gradient_rgba(
+            off.dc(),
+            &rc,
+            Rgba::new(0, 0, 255, 128),
+            Rgba::new(255, 0, 0, 0),
+            FillDirection::Vert
+        ));
+    }
+
+    #[test]
+    fn test_fill_gradient_rgba_invalid() {
+        let off = make_offscreen(10, 10);
+        let bad = RECT {
+            left: 5,
+            top: 0,
+            right: 5,
+            bottom: 10,
+        };
+        assert!(!fill_gradient_rgba(
+            off.dc(),
+            &bad,
+            Rgba::new(0, 0, 0, 0),
+            Rgba::new(255, 255, 255, 128),
+            FillDirection::Horz
+        ));
+    }
+
+    #[test]
+    fn test_gloss_overlay_smoke() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        assert!(gloss_overlay(off.dc(), &rc, 192, 32, 32, 0));
+        // 空矩形は false。
+        let empty = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 10,
+        };
+        assert!(!gloss_overlay(off.dc(), &empty, 192, 32, 32, 0));
+    }
+
+    #[test]
+    fn test_color_overlay_smoke() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        assert!(color_overlay(off.dc(), &rc, 0x0000_00FF, 128));
+        // 空矩形は false。
+        let empty = RECT {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 0,
+        };
+        assert!(!color_overlay(off.dc(), &empty, 0x0000_00FF, 128));
     }
 }
