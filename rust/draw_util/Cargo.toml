@@ -1,0 +1,22 @@
+[package]
+name = "tvtest_draw_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's DrawUtil (color/alpha math, gradient/gloss computation, border rect geometry), using windows-rs"
+
+[lib]
+name = "tvtest_draw_util"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_util = { path = "../util" }
+tvtest_dpi_util = { path = "../dpi_util" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls",
+]
