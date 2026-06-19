@@ -33,8 +33,10 @@
 //! 移植する。メッセージ分類 ([`classify_message`]) と生成/破棄系の戻り値決定
 //! ([`nccreate_outcome`] / [`create_outcome`]) を純粋関数に切り出し、`GWLP_USERDATA` を使う
 //! トランポリン ([`custom_wnd_proc`]) と仮想関数契約 ([`CustomWindowHandler`]) を提供する。
-//! `CPopupWindow` のダークモード状態遷移 ([`PopupDarkModeState`]) も純粋に表すが、
-//! `DarkMode.cpp`(`SetWindowAllowDarkMode` 等)が未移植のため Win32 への接続はその移植後に行う。
+//! `CPopupWindow` のダークモード状態 ([`PopupDarkModeState`]) は、各 DarkMode API の結果を
+//! 引数注入する純粋遷移と、移植済みの [`tvtest_dark_mode`] を呼ぶ Win32 駆動メソッド
+//! ([`PopupDarkModeState::handle_create`] / [`PopupDarkModeState::handle_setting_change`])の
+//! 二層で表す。
 //! 実ウィンドウ生成(原実装で純粋仮想の `Create`)は派生側の責務のため本クレートには含めない。
 
 #![cfg(windows)]
@@ -805,9 +807,10 @@ pub unsafe extern "system" fn custom_wnd_proc<H: CustomWindowHandler>(
 /// `CPopupWindow` のダークモード状態。原実装 `CPopupWindow` (BasicWindow.h:111,
 /// BasicWindow.cpp:517)。`m_fAllowDarkMode` / `m_fDarkMode` に対応する。
 ///
-/// `DarkMode.cpp`(`SetWindowAllowDarkMode` / `IsDarkMode` / `SetWindowFrameDarkMode` /
-/// `IsDarkModeSettingChanged`)は未移植のため、本構造体は状態遷移ロジックのみを純粋に表す。
-/// 各 API の結果は引数で注入してテスト可能にしている。Win32 への接続は DarkMode 移植後に行う。
+/// 状態遷移 ([`on_create`](Self::on_create) / [`on_setting_change`](Self::on_setting_change)) は
+/// 各 DarkMode API の結果を引数注入する純粋関数として表し単体テストで検証する。実 API
+/// ([`tvtest_dark_mode`]) への接続は [`handle_create`](Self::handle_create) /
+/// [`handle_setting_change`](Self::handle_setting_change) が担う。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PopupDarkModeState {
     pub allow_dark_mode: bool,
@@ -852,6 +855,56 @@ impl PopupDarkModeState {
         }
         false
     }
+
+    /// `WM_CREATE` を実 DarkMode API で処理する。原実装 `CPopupWindow::HandleMessage` の
+    /// `WM_CREATE` 分岐 (BasicWindow.cpp:520-528)。
+    ///
+    /// `SetWindowAllowDarkMode(hwnd, true)` →(許可成功かつ `IsDarkMode()` のとき)
+    /// `SetWindowFrameDarkMode(hwnd, true)` を原実装の短絡順序どおり呼び、結果を
+    /// [`on_create`](Self::on_create) に渡す。
+    pub fn handle_create(&mut self, hwnd: HWND) {
+        let allow_ok = tvtest_dark_mode::set_window_allow_dark_mode(hwnd, true);
+        let (is_dark, frame_set_ok) = if allow_ok {
+            let is_dark = tvtest_dark_mode::is_dark_mode();
+            let frame_set_ok = if is_dark {
+                tvtest_dark_mode::set_window_frame_dark_mode(hwnd, true)
+            } else {
+                false
+            };
+            (is_dark, frame_set_ok)
+        } else {
+            (false, false)
+        };
+        self.on_create(allow_ok, is_dark, frame_set_ok);
+    }
+
+    /// `WM_SETTINGCHANGE` を実 DarkMode API で処理する。原実装 `CPopupWindow::HandleMessage` の
+    /// `WM_SETTINGCHANGE` 分岐 (BasicWindow.cpp:530-543)。
+    ///
+    /// 戻り値が `true` のとき、呼び出し側は原実装の `OnDarkModeChanged(self.dark_mode)` 相当を
+    /// 行う。原実装の短絡(`m_fAllowDarkMode` → `IsDarkModeSettingChanged` → `IsDarkMode` →
+    /// `SetWindowFrameDarkMode`)を保つため、各 API は必要なときのみ呼ぶ。
+    pub fn handle_setting_change(
+        &mut self,
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> bool {
+        let setting_changed = self.allow_dark_mode
+            && tvtest_dark_mode::is_dark_mode_setting_changed(hwnd, msg, wparam, lparam);
+        let is_dark = if setting_changed {
+            tvtest_dark_mode::is_dark_mode()
+        } else {
+            false
+        };
+        let frame_set_ok = if setting_changed && self.dark_mode != is_dark {
+            tvtest_dark_mode::set_window_frame_dark_mode(hwnd, is_dark)
+        } else {
+            false
+        };
+        self.on_setting_change(setting_changed, is_dark, frame_set_ok)
+    }
 }
 
 // ===========================================================================
@@ -861,6 +914,7 @@ impl PopupDarkModeState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
 
     // --- WindowPosition ---
 
@@ -1174,6 +1228,33 @@ mod tests {
         // フレーム設定失敗 → 状態は変えない。
         let mut s = PopupDarkModeState { allow_dark_mode: true, dark_mode: false };
         assert!(!s.on_setting_change(true, true, false));
+        assert!(!s.dark_mode);
+    }
+
+    // --- CPopupWindow: 実 DarkMode API での駆動(無効ハンドル・非該当メッセージ) ---
+
+    #[test]
+    fn test_popup_handle_create_invalid_hwnd() {
+        // 無効な HWND では SetWindowAllowDarkMode が失敗するので状態は変わらない。
+        let mut s = PopupDarkModeState::new();
+        s.handle_create(HWND::default());
+        assert!(!s.allow_dark_mode);
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_handle_setting_change_not_allowed() {
+        // allow していなければ実 API を呼ばず false(短絡)。
+        let mut s = PopupDarkModeState::new();
+        assert!(!s.handle_setting_change(HWND::default(), WM_SETTINGCHANGE, WPARAM(0), LPARAM(0)));
+        assert!(!s.dark_mode);
+    }
+
+    #[test]
+    fn test_popup_handle_setting_change_non_setting_message() {
+        // allow 済でも WM_SETTINGCHANGE 以外なら IsDarkModeSettingChanged が false → 変化なし。
+        let mut s = PopupDarkModeState { allow_dark_mode: true, dark_mode: false };
+        assert!(!s.handle_setting_change(HWND::default(), WM_SIZE, WPARAM(0), LPARAM(0)));
         assert!(!s.dark_mode);
     }
 }

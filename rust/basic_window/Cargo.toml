@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [target.'cfg(windows)'.dependencies]
 tvtest_winutil = { path = "../winutil" }
+tvtest_dark_mode = { path = "../dark_mode" }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
