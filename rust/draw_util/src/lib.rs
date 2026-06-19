@@ -36,9 +36,11 @@ use std::mem::size_of;
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BitBlt, CreateBrushIndirect, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateSolidBrush, DeleteDC, DeleteObject, GetCurrentObject, GetDC, GetObjectW, ReleaseDC,
-    SelectObject, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, HBITMAP,
-    HBRUSH, HDC, HGDIOBJ, LOGBRUSH, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE,
+    CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetCurrentObject, GetDC, GetDCPenColor,
+    GetObjectW, GetStockObject, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject,
+    SetDCBrushColor, SetDCPenColor, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER,
+    BLENDFUNCTION, DC_BRUSH, DC_PEN, GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT,
+    HBITMAP, HBRUSH, HDC, HGDIOBJ, LOGBRUSH, OBJ_BITMAP, SRCCOPY, STRETCH_BLT_MODE, TRIVERTEX,
 };
 use windows::Win32::UI::Controls::MARGINS;
 
@@ -315,6 +317,302 @@ pub fn scale_margins(margins: MARGINS, num: i32, denom: i32) -> MARGINS {
         cyTopHeight: mul_div(margins.cyTopHeight, num, denom),
         cyBottomHeight: mul_div(margins.cyBottomHeight, num, denom),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 塗りつぶし方向(DrawUtil.h:51)
+// ---------------------------------------------------------------------------
+
+/// グラデーション等の塗り方向。原実装 `DrawUtil::FillDirection`(DrawUtil.h:51)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillDirection {
+    /// 水平方向
+    Horz,
+    /// 垂直方向
+    Vert,
+    /// 左右対称
+    HorzMirror,
+    /// 上下対称
+    VertMirror,
+}
+
+impl FillDirection {
+    /// 対称(Mirror)方向かどうか。
+    fn is_mirror(self) -> bool {
+        matches!(self, FillDirection::HorzMirror | FillDirection::VertMirror)
+    }
+
+    /// 水平系(`Horz` / `HorzMirror`)かどうか。
+    fn is_horizontal(self) -> bool {
+        matches!(self, FillDirection::Horz | FillDirection::HorzMirror)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 塗りつぶし描画関数(DrawUtil.cpp)
+//
+// アルファ合成を伴う関数(FillGradient の RGBA 版・GlossOverlay・ColorOverlay)は
+// DIB セクションのピクセル操作が必要なため後続段で移植する。
+// ---------------------------------------------------------------------------
+
+/// 単色で矩形を塗りつぶす。原実装 `Fill`(DrawUtil.cpp:47)。
+pub fn fill(hdc: HDC, rect: &RECT, color: u32) -> bool {
+    if hdc.0.is_null() {
+        return false;
+    }
+    // SAFETY: hdc は有効。DC ブラシ色を一時変更して塗り、元に戻す。
+    unsafe {
+        let old_color = SetDCBrushColor(hdc, COLORREF(color));
+        let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
+        let result = FillRect(hdc, rect, brush);
+        SetDCBrushColor(hdc, old_color);
+        result != 0
+    }
+}
+
+/// 2色のグラデーションで矩形を塗りつぶす。原実装 `FillGradient`(COLORREF 版、DrawUtil.cpp:59)。
+pub fn fill_gradient(
+    hdc: HDC,
+    rect: &RECT,
+    color1: u32,
+    color2: u32,
+    direction: FillDirection,
+) -> bool {
+    if hdc.0.is_null() || rect.left >= rect.right || rect.top >= rect.bottom {
+        return false;
+    }
+
+    // 1px 幅(高さ)は中間色で単色塗り。
+    if (rect.right - rect.left == 1 && direction.is_horizontal())
+        || (rect.bottom - rect.top == 1 && !direction.is_horizontal())
+    {
+        return fill(hdc, rect, mix_color(color1, color2, 128));
+    }
+
+    // 対称方向は半分ずつ色を入れ替えて再帰する。
+    if direction.is_mirror() {
+        let mut rc = *rect;
+        if direction == FillDirection::HorzMirror {
+            rc.right = (rect.left + rect.right) / 2;
+            if rc.right > rc.left {
+                fill_gradient(hdc, &rc, color1, color2, FillDirection::Horz);
+                rc.left = rc.right;
+            }
+            rc.right = rect.right;
+            fill_gradient(hdc, &rc, color2, color1, FillDirection::Horz);
+        } else {
+            rc.bottom = (rect.top + rect.bottom) / 2;
+            if rc.bottom > rc.top {
+                fill_gradient(hdc, &rc, color1, color2, FillDirection::Vert);
+                rc.top = rc.bottom;
+            }
+            rc.bottom = rect.bottom;
+            fill_gradient(hdc, &rc, color2, color1, FillDirection::Vert);
+        }
+        return true;
+    }
+
+    // TRIVERTEX による GdiGradientFill。
+    let vert = [
+        TRIVERTEX {
+            x: rect.left,
+            y: rect.top,
+            Red: channel_to_trivertex(get_r(color1) as u8),
+            Green: channel_to_trivertex(get_g(color1) as u8),
+            Blue: channel_to_trivertex(get_b(color1) as u8),
+            Alpha: 0,
+        },
+        TRIVERTEX {
+            x: rect.right,
+            y: rect.bottom,
+            Red: channel_to_trivertex(get_r(color2) as u8),
+            Green: channel_to_trivertex(get_g(color2) as u8),
+            Blue: channel_to_trivertex(get_b(color2) as u8),
+            Alpha: 0,
+        },
+    ];
+    let mesh = GRADIENT_RECT {
+        UpperLeft: 0,
+        LowerRight: 1,
+    };
+    let mode = if direction == FillDirection::Horz {
+        GRADIENT_FILL_RECT_H
+    } else {
+        GRADIENT_FILL_RECT_V
+    };
+    // SAFETY: vert/mesh は有効なローカル。
+    unsafe { GradientFill(hdc, &vert, &mesh as *const GRADIENT_RECT as *const c_void, 1, mode) }
+        .as_bool()
+}
+
+/// 光沢のあるグラデーションで塗りつぶす。原実装 `FillGlossyGradient`(DrawUtil.cpp:202)。
+pub fn fill_glossy_gradient(
+    hdc: HDC,
+    rect: &RECT,
+    color1: u32,
+    color2: u32,
+    direction: FillDirection,
+    gloss_ratio1: i32,
+    gloss_ratio2: i32,
+) -> bool {
+    let colors = glossy_gradient_colors(
+        color1,
+        color2,
+        direction.is_mirror(),
+        gloss_ratio1 as u8,
+        gloss_ratio2 as u8,
+    );
+    let dir = if direction.is_horizontal() {
+        FillDirection::Horz
+    } else {
+        FillDirection::Vert
+    };
+
+    // 前半の矩形。
+    let mut rc = *rect;
+    if direction.is_horizontal() {
+        rc.right = (rect.left + rect.right) / 2;
+        rc.bottom = rect.bottom;
+    } else {
+        rc.right = rect.right;
+        rc.bottom = (rect.top + rect.bottom) / 2;
+    }
+    fill_gradient(hdc, &rc, colors.first_start, colors.first_end, dir);
+
+    // 後半の矩形。
+    if direction.is_horizontal() {
+        rc.left = rc.right;
+        rc.right = rect.right;
+    } else {
+        rc.top = rc.bottom;
+        rc.bottom = rect.bottom;
+    }
+    fill_gradient(hdc, &rc, colors.second_start, colors.second_end, dir);
+    true
+}
+
+/// 縞々のグラデーションで塗りつぶす。原実装 `FillInterlacedGradient`(DrawUtil.cpp:247)。
+pub fn fill_interlaced_gradient(
+    hdc: HDC,
+    rect: &RECT,
+    color1: u32,
+    color2: u32,
+    direction: FillDirection,
+    line_color: u32,
+    line_opacity: i32,
+) -> bool {
+    if hdc.0.is_null() {
+        return false;
+    }
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    if width == 1 || height == 1 {
+        return fill(hdc, rect, mix_color(color1, color2, 128));
+    }
+
+    // SAFETY: hdc は有効。DC ペンで 1px 線を引いて塗る。
+    unsafe {
+        let pen_old = SelectObject(hdc, GetStockObject(DC_PEN));
+        let old_pen_color = GetDCPenColor(hdc);
+
+        if direction.is_horizontal() {
+            for x in rect.left..rect.right {
+                let local = x - rect.left;
+                let ratio = if direction == FillDirection::Horz {
+                    linear_gradient_ratio(local, width)
+                } else {
+                    mirror_gradient_ratio(local, width)
+                };
+                let mut color = mix_color(color1, color2, ratio);
+                if local % 2 == 1 {
+                    color = mix_color(line_color, color, line_opacity as u8);
+                }
+                SetDCPenColor(hdc, COLORREF(color));
+                let _ = MoveToEx(hdc, x, rect.top, None);
+                let _ = LineTo(hdc, x, rect.bottom);
+            }
+        } else {
+            for y in rect.top..rect.bottom {
+                let local = y - rect.top;
+                let ratio = if direction == FillDirection::Vert {
+                    linear_gradient_ratio(local, height)
+                } else {
+                    mirror_gradient_ratio(local, height)
+                };
+                let mut color = mix_color(color1, color2, ratio);
+                if local % 2 == 1 {
+                    color = mix_color(line_color, color, line_opacity as u8);
+                }
+                SetDCPenColor(hdc, COLORREF(color));
+                let _ = MoveToEx(hdc, rect.left, y, None);
+                let _ = LineTo(hdc, rect.right, y);
+            }
+        }
+
+        SetDCPenColor(hdc, old_pen_color);
+        let _ = SelectObject(hdc, pen_old);
+    }
+    true
+}
+
+/// 矩形の周囲(枠)をブラシで塗りつぶす。原実装 `FillBorder`(DrawUtil.cpp:407)。
+///
+/// `paint` が `None` のときは `border` 全体を描画範囲とする。
+pub fn fill_border(
+    hdc: HDC,
+    border: &RECT,
+    empty: &RECT,
+    paint: Option<&RECT>,
+    hbr: HBRUSH,
+) -> bool {
+    let paint = paint.unwrap_or(border);
+    let rects = fill_border_rects(*border, *empty, *paint);
+    for rc in &rects {
+        // SAFETY: hdc/hbr の有効性は呼び出し側責務(原実装も同様)。
+        unsafe {
+            FillRect(hdc, rc, hbr);
+        }
+    }
+    true
+}
+
+/// 矩形の周囲(枠)を単色で塗りつぶす。原実装 `FillBorder`(色指定版、DrawUtil.cpp:442)。
+pub fn fill_border_color(
+    hdc: HDC,
+    border: &RECT,
+    empty: &RECT,
+    paint: Option<&RECT>,
+    color: u32,
+) -> bool {
+    // SAFETY: hdc の有効性は呼び出し側責務。DC ブラシ色を一時変更して塗る。
+    unsafe {
+        let old_color = SetDCBrushColor(hdc, COLORREF(color));
+        let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
+        let result = fill_border(hdc, border, empty, paint, brush);
+        SetDCBrushColor(hdc, old_color);
+        result
+    }
+}
+
+/// 矩形の周囲を指定幅・単色で塗りつぶす。原実装 `FillBorder`(幅指定版、DrawUtil.cpp:453)。
+pub fn fill_border_width(
+    hdc: HDC,
+    border: &RECT,
+    border_width: i32,
+    paint: Option<&RECT>,
+    color: u32,
+) -> bool {
+    // InflateRect(-border_width, -border_width) 相当。
+    let empty = RECT {
+        left: border.left + border_width,
+        top: border.top + border_width,
+        right: border.right - border_width,
+        bottom: border.bottom - border_width,
+    };
+    fill_border_color(hdc, border, &empty, paint, color)
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,5 +1379,118 @@ mod tests {
         assert!(!off.create(0, 10, None));
         assert!(!off.create(10, -1, None));
         assert!(!off.is_created());
+    }
+
+    // ----- 描画関数(オフスクリーンへの実描画スモーク) -----
+
+    fn make_offscreen(width: i32, height: i32) -> Offscreen {
+        let mut off = Offscreen::new();
+        assert!(off.create(width, height, None));
+        off
+    }
+
+    #[test]
+    fn test_fill_null_hdc() {
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 10,
+        };
+        assert!(!fill(HDC::default(), &rc, 0));
+    }
+
+    #[test]
+    fn test_fill_on_offscreen() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        assert!(fill(off.dc(), &rc, 0x0000_00FF));
+    }
+
+    #[test]
+    fn test_fill_gradient_variants() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        // 非対称はクラッシュしないこと、対称は再帰後に true。
+        let _ = fill_gradient(off.dc(), &rc, 0x0000_00FF, 0x00FF_0000, FillDirection::Horz);
+        let _ = fill_gradient(off.dc(), &rc, 0x0000_00FF, 0x00FF_0000, FillDirection::Vert);
+        assert!(fill_gradient(
+            off.dc(),
+            &rc,
+            0x0000_00FF,
+            0x00FF_0000,
+            FillDirection::HorzMirror
+        ));
+        assert!(fill_gradient(
+            off.dc(),
+            &rc,
+            0x0000_00FF,
+            0x00FF_0000,
+            FillDirection::VertMirror
+        ));
+    }
+
+    #[test]
+    fn test_fill_gradient_invalid_rect() {
+        let off = make_offscreen(10, 10);
+        // left == right の空矩形。
+        let bad = RECT {
+            left: 5,
+            top: 0,
+            right: 5,
+            bottom: 10,
+        };
+        assert!(!fill_gradient(off.dc(), &bad, 0, 0x00FF_FFFF, FillDirection::Horz));
+    }
+
+    #[test]
+    fn test_fill_glossy_and_interlaced() {
+        let off = make_offscreen(20, 20);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        };
+        assert!(fill_glossy_gradient(
+            off.dc(),
+            &rc,
+            0x0020_4060,
+            0x0008_0808,
+            FillDirection::Vert,
+            96,
+            48
+        ));
+        assert!(fill_interlaced_gradient(
+            off.dc(),
+            &rc,
+            0x0020_4060,
+            0x0008_0808,
+            FillDirection::Horz,
+            0,
+            48
+        ));
+    }
+
+    #[test]
+    fn test_fill_border_smoke() {
+        let off = make_offscreen(30, 30);
+        let border = RECT {
+            left: 0,
+            top: 0,
+            right: 30,
+            bottom: 30,
+        };
+        assert!(fill_border_width(off.dc(), &border, 3, None, 0x00FF_FFFF));
     }
 }
