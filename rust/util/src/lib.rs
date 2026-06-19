@@ -381,6 +381,52 @@ pub fn get_day_of_week_text(day_of_week: i32) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DIB(デバイス独立ビットマップ)のサイズ計算
+//
+// 原実装は BITMAPINFOHEADER ポインタを取るが(Image.cpp / Image.h)、計算はヘッダの
+// フィールド値だけで完結する整数演算のため、本クレートを Win32 非依存に保つよう
+// 必要な値を引数で受ける純粋関数として移植する。
+// ---------------------------------------------------------------------------
+
+/// DIB の 1 行のバイト数(4 バイト境界に切り上げ)。原実装 `DIB_ROW_BYTES`(Image.h:40)。
+///
+/// `((width * bit_count + 31) / 32) * 4`。
+pub fn dib_row_bytes(width: i32, bit_count: u16) -> usize {
+    (((width as i64) * (bit_count as i64) + 31) / 32 * 4) as usize
+}
+
+/// DIB の情報部(ヘッダ + カラーテーブル/ビットフィールド)のサイズ。
+/// 原実装 `CalcDIBInfoSize`(Image.cpp:39)。
+///
+/// `bi_size` は `biSize`、`compression` は `biCompression`。8bpp 以下はパレット
+/// (`2^bit_count` 個の `RGBQUAD`)、`BI_BITFIELDS`(=3)は 3 つの `DWORD` を加える。
+pub fn calc_dib_info_size(bi_size: u32, bit_count: u16, compression: u32) -> usize {
+    /// `BI_BITFIELDS`
+    const BI_BITFIELDS: u32 = 3;
+    let mut size = bi_size as usize;
+    if bit_count <= 8 {
+        // (1 << bit_count) 個の RGBQUAD(各 4 バイト)。
+        size += (1usize << bit_count) * 4;
+    } else if compression == BI_BITFIELDS {
+        // 3 つの DWORD(各 4 バイト)。
+        size += 3 * 4;
+    }
+    size
+}
+
+/// DIB のビット(ピクセル)部のサイズ。原実装 `CalcDIBBitsSize`(Image.cpp:52)。
+///
+/// `1 行のバイト数 * |height|`。
+pub fn calc_dib_bits_size(width: i32, bit_count: u16, height: i32) -> usize {
+    dib_row_bytes(width, bit_count) * height.unsigned_abs() as usize
+}
+
+/// DIB 全体(情報部 + ビット部)のサイズ。原実装 `CalcDIBSize`(Image.cpp:58)。
+pub fn calc_dib_size(bi_size: u32, width: i32, bit_count: u16, height: i32, compression: u32) -> usize {
+    calc_dib_info_size(bi_size, bit_count, compression) + calc_dib_bits_size(width, bit_count, height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,5 +611,59 @@ mod tests {
         assert_eq!(get_day_of_week_text(6), "土");
         assert_eq!(get_day_of_week_text(7), "？");
         assert_eq!(get_day_of_week_text(-1), "？");
+    }
+
+    // ----- DIB サイズ計算 -----
+
+    #[test]
+    fn test_dib_row_bytes() {
+        // 32bpp は width*4(既に 4 バイト境界)。
+        assert_eq!(dib_row_bytes(10, 32), 40);
+        // 24bpp は 4 バイト境界に切り上げ。width=10 → 30 → 32。
+        assert_eq!(dib_row_bytes(10, 24), 32);
+        // 1bpp width=1 → 1bit → 4 バイトに切り上げ。
+        assert_eq!(dib_row_bytes(1, 1), 4);
+        // 8bpp width=5 → 5 バイト → 8。
+        assert_eq!(dib_row_bytes(5, 8), 8);
+    }
+
+    #[test]
+    fn test_calc_dib_info_size() {
+        const BITMAPINFOHEADER_SIZE: u32 = 40;
+        // 32bpp(BI_RGB=0): カラーテーブルなし。
+        assert_eq!(
+            calc_dib_info_size(BITMAPINFOHEADER_SIZE, 32, 0),
+            40
+        );
+        // 8bpp: 256 色 * 4 バイト = 1024 を加算。
+        assert_eq!(
+            calc_dib_info_size(BITMAPINFOHEADER_SIZE, 8, 0),
+            40 + 256 * 4
+        );
+        // 1bpp: 2 色 * 4 = 8。
+        assert_eq!(calc_dib_info_size(BITMAPINFOHEADER_SIZE, 1, 0), 40 + 8);
+        // 16bpp + BI_BITFIELDS(3): 3 * DWORD = 12 を加算。
+        assert_eq!(calc_dib_info_size(BITMAPINFOHEADER_SIZE, 16, 3), 40 + 12);
+        // 16bpp + BI_RGB: 加算なし。
+        assert_eq!(calc_dib_info_size(BITMAPINFOHEADER_SIZE, 16, 0), 40);
+    }
+
+    #[test]
+    fn test_calc_dib_bits_size() {
+        // 32bpp 10x8 = 40 * 8 = 320。
+        assert_eq!(calc_dib_bits_size(10, 32, 8), 320);
+        // 高さが負(トップダウン)でも絶対値。
+        assert_eq!(calc_dib_bits_size(10, 32, -8), 320);
+        // 24bpp 10 行 4 = 32 * 4 = 128。
+        assert_eq!(calc_dib_bits_size(10, 24, 4), 128);
+    }
+
+    #[test]
+    fn test_calc_dib_size() {
+        const H: u32 = 40;
+        // 32bpp 10x8: 情報 40 + ビット 320 = 360。
+        assert_eq!(calc_dib_size(H, 10, 32, 8, 0), 360);
+        // 8bpp 10x8: 情報(40+1024) + ビット(dib_row_bytes(10,8)=12 * 8 = 96) = 1160。
+        assert_eq!(calc_dib_size(H, 10, 8, 8, 0), (40 + 1024) + 12 * 8);
     }
 }
