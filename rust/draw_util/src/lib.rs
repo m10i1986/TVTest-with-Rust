@@ -32,10 +32,10 @@
 
 use core::ffi::c_void;
 use core::ptr::{copy_nonoverlapping, null_mut};
-use std::mem::size_of;
+use std::mem::{size_of, transmute};
 
-use windows::Win32::Foundation::{COLORREF, RECT};
-use windows::Win32::Foundation::HANDLE;
+use windows::core::{s, w, PCWSTR};
+use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BitBlt, CreateBrushIndirect, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateDIBSection, CreateFontIndirectW, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
@@ -43,11 +43,17 @@ use windows::Win32::Graphics::Gdi::{
     GetTextFaceW, GetTextMetricsW, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject,
     SetDCBrushColor, SetDCPenColor, SetDIBColorTable, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
     AC_SRC_OVER, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN,
-    DEFAULT_GUI_FONT, DIBSECTION, DIB_RGB_COLORS, FW_NORMAL, GRADIENT_FILL_RECT_H,
+    DEFAULT_GUI_FONT, DIBSECTION, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, FW_NORMAL, GRADIENT_FILL_RECT_H,
     GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGBRUSH, LOGFONTW,
     OBJ_BITMAP, RGBQUAD, SRCCOPY, STRETCH_BLT_MODE, TEXTMETRICW, TRIVERTEX,
 };
-use windows::Win32::UI::Controls::MARGINS;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::UI::Controls::{
+    CloseThemeData, DrawThemeBackground, DrawThemeText, GetThemeColor, GetThemeFont, GetThemeInt,
+    GetThemeMargins, GetThemePartSize, GetThemeSysFont, GetThemeTextExtent,
+    GetThemeTransitionDuration, IsAppThemed, IsThemeBackgroundPartiallyTransparent, OpenThemeData,
+    HTHEME, MARGINS, THEME_PROPERTY_SYMBOL_ID, TS_TRUE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CopyImage, SystemParametersInfoW, FE_FONTSMOOTHINGCLEARTYPE, IMAGE_BITMAP, IMAGE_FLAGS,
     NONCLIENTMETRICSW, SPI_GETFONTSMOOTHING, SPI_GETFONTSMOOTHINGTYPE, SPI_GETNONCLIENTMETRICS,
@@ -56,6 +62,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use tvtest_dpi_util::mul_div;
 use tvtest_util::mix_color;
+use tvtest_winutil::is_windows_10_creators_update_or_later;
 
 /// 白(`RGB(255, 255, 255)`)の `COLORREF`。
 const WHITE: u32 = 0x00FF_FFFF;
@@ -2151,6 +2158,298 @@ impl Drop for Bitmap {
     }
 }
 
+// ---------------------------------------------------------------------------
+// uxtheme テーマラッパー(DrawUtil.cpp / DrawUtil.h)
+// ---------------------------------------------------------------------------
+
+/// `TMT_TRANSITIONDURATIONS`(vssym32.h)。
+const TMT_TRANSITIONDURATIONS: i32 = 6000;
+
+type OpenThemeDataForDpiFn = unsafe extern "system" fn(HWND, PCWSTR, u32) -> HTHEME;
+
+/// `OpenThemeDataForDpi` を動的に解決して呼ぶ。`GET_MODULE_FUNCTION`(Util.h:278)相当。
+///
+/// Windows 10 Creators Update 以降でのみ存在するため動的ロードする。
+fn open_theme_data_for_dpi(hwnd: HWND, class_list: PCWSTR, dpi: u32) -> HTHEME {
+    let hmodule = unsafe { GetModuleHandleW(w!("uxtheme.dll")) }.unwrap_or_default();
+    match unsafe { GetProcAddress(hmodule, s!("OpenThemeDataForDpi")) } {
+        Some(proc) => {
+            // SAFETY: 解決した関数は OpenThemeDataForDpi のシグネチャと一致する。
+            let f: OpenThemeDataForDpiFn = unsafe { transmute(proc) };
+            unsafe { f(hwnd, class_list, dpi) }
+        }
+        None => HTHEME::default(),
+    }
+}
+
+/// uxtheme のテーマ(`HTHEME`)の RAII ラッパー。原実装 `TVTest::CUxTheme`(DrawUtil.h:334)。
+///
+/// `Drop`(`~CUxTheme`)で `CloseThemeData` する。
+pub struct UxTheme {
+    htheme: HTHEME,
+}
+
+impl UxTheme {
+    /// 空(未オープン)のラッパーを作る。
+    pub fn new() -> Self {
+        Self {
+            htheme: HTHEME::default(),
+        }
+    }
+
+    /// テーマを開く。`CUxTheme::Open`(DrawUtil.cpp:1743)。
+    ///
+    /// `dpi > 0` かつ Windows 10 Creators Update 以降なら `OpenThemeDataForDpi`(動的)を試し、
+    /// 失敗時は `OpenThemeData` にフォールバックする。
+    pub fn open(&mut self, hwnd: HWND, class_list: PCWSTR, dpi: i32) -> bool {
+        self.close();
+
+        if dpi > 0 && is_windows_10_creators_update_or_later() {
+            let htheme = open_theme_data_for_dpi(hwnd, class_list, dpi as u32);
+            if htheme.0 != 0 {
+                self.htheme = htheme;
+                return true;
+            }
+        }
+
+        // SAFETY: class_list は有効な NUL 終端ワイド文字列。
+        let htheme = unsafe { OpenThemeData(Some(hwnd), class_list) };
+        if htheme.0 == 0 {
+            return false;
+        }
+        self.htheme = htheme;
+        true
+    }
+
+    /// テーマを閉じる。`CUxTheme::Close`(DrawUtil.cpp:1766)。
+    pub fn close(&mut self) {
+        if self.htheme.0 != 0 {
+            // SAFETY: 自身が所有するテーマハンドル。
+            unsafe {
+                let _ = CloseThemeData(self.htheme);
+            }
+            self.htheme = HTHEME::default();
+        }
+    }
+
+    /// 開いているか。`CUxTheme::IsOpen`(DrawUtil.cpp:1774)。
+    pub fn is_open(&self) -> bool {
+        self.htheme.0 != 0
+    }
+
+    /// アプリにテーマが適用されているか。`CUxTheme::IsActive`(DrawUtil.cpp:1779)。
+    pub fn is_active(&self) -> bool {
+        // SAFETY: 引数なしの問い合わせ。
+        unsafe { IsAppThemed() }.as_bool()
+    }
+
+    /// 背景を描画する。`CUxTheme::DrawBackground`(DrawUtil.cpp:1784)。
+    pub fn draw_background(&self, hdc: HDC, part_id: i32, state_id: i32, rect: &RECT) -> bool {
+        if self.htheme.0 == 0 {
+            return false;
+        }
+        // SAFETY: htheme/hdc は有効。クリップ矩形なし。
+        unsafe { DrawThemeBackground(self.htheme, hdc, part_id, state_id, rect, None) }.is_ok()
+    }
+
+    /// 半透明部分は下地を描いてから背景を描画する。`CUxTheme::DrawBackground`(下地版、DrawUtil.cpp:1791)。
+    pub fn draw_background_with_base(
+        &self,
+        hdc: HDC,
+        part_id: i32,
+        state_id: i32,
+        base_part_id: i32,
+        base_state_id: i32,
+        rect: &RECT,
+    ) -> bool {
+        if self.htheme.0 == 0 {
+            return false;
+        }
+        // SAFETY: htheme/hdc は有効。
+        unsafe {
+            if IsThemeBackgroundPartiallyTransparent(self.htheme, part_id, state_id).as_bool()
+                && DrawThemeBackground(self.htheme, hdc, base_part_id, base_state_id, rect, None)
+                    .is_err()
+            {
+                return false;
+            }
+            DrawThemeBackground(self.htheme, hdc, part_id, state_id, rect, None).is_ok()
+        }
+    }
+
+    /// テーマテキストを描画する。`CUxTheme::DrawText`(DrawUtil.cpp:1808)。
+    ///
+    /// `text` は NUL を含まない文字列。
+    pub fn draw_text(
+        &self,
+        hdc: HDC,
+        part_id: i32,
+        state_id: i32,
+        text: &[u16],
+        text_flags: u32,
+        rect: &RECT,
+    ) -> bool {
+        if self.htheme.0 == 0 {
+            return false;
+        }
+        // SAFETY: htheme/hdc は有効、text は有効なスライス。
+        unsafe {
+            DrawThemeText(
+                self.htheme,
+                hdc,
+                part_id,
+                state_id,
+                text,
+                DRAW_TEXT_FORMAT(text_flags),
+                0,
+                rect,
+            )
+        }
+        .is_ok()
+    }
+
+    /// テーマテキストの外接矩形を取得する。`CUxTheme::GetTextExtent`(DrawUtil.cpp:1819)。
+    pub fn get_text_extent(
+        &self,
+        hdc: HDC,
+        part_id: i32,
+        state_id: i32,
+        text: &[u16],
+        text_flags: u32,
+    ) -> Option<RECT> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        // SAFETY: htheme/hdc は有効、text は有効なスライス。外接矩形は戻り値で返る。
+        unsafe {
+            GetThemeTextExtent(
+                self.htheme,
+                hdc,
+                part_id,
+                state_id,
+                text,
+                DRAW_TEXT_FORMAT(text_flags),
+                None,
+            )
+        }
+        .ok()
+    }
+
+    /// マージンを取得する。`CUxTheme::GetMargins`(DrawUtil.cpp:1831)。
+    pub fn get_margins(&self, part_id: i32, state_id: i32, prop_id: i32) -> Option<MARGINS> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        // SAFETY: マージンは戻り値で返る。
+        unsafe {
+            GetThemeMargins(
+                self.htheme,
+                None,
+                part_id,
+                state_id,
+                THEME_PROPERTY_SYMBOL_ID(prop_id as u32),
+                None,
+            )
+        }
+        .ok()
+    }
+
+    /// 色を取得する。`CUxTheme::GetColor`(DrawUtil.cpp:1838)。
+    pub fn get_color(&self, part_id: i32, state_id: i32, prop_id: i32) -> Option<u32> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        // SAFETY: 色は戻り値で返る。
+        unsafe {
+            GetThemeColor(self.htheme, part_id, state_id, THEME_PROPERTY_SYMBOL_ID(prop_id as u32))
+        }
+        .ok()
+        .map(|c| c.0)
+    }
+
+    /// フォントを取得する。`CUxTheme::GetFont`(DrawUtil.cpp:1845)。
+    pub fn get_font(&self, part_id: i32, state_id: i32, prop_id: i32) -> Option<LOGFONTW> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        let mut log_font = LOGFONTW::default();
+        // SAFETY: 出力バッファ log_font。
+        let ok = unsafe {
+            GetThemeFont(self.htheme, None, part_id, state_id, prop_id, &mut log_font)
+        }
+        .is_ok();
+        ok.then_some(log_font)
+    }
+
+    /// システムフォントを取得する。`CUxTheme::GetSysFont`(DrawUtil.cpp:1852)。
+    pub fn get_sys_font(&self, font_id: i32) -> Option<LOGFONTW> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        let mut log_font = LOGFONTW::default();
+        // SAFETY: 出力バッファ log_font。
+        let ok = unsafe {
+            GetThemeSysFont(Some(self.htheme), THEME_PROPERTY_SYMBOL_ID(font_id as u32), &mut log_font)
+        }
+        .is_ok();
+        ok.then_some(log_font)
+    }
+
+    /// 整数プロパティを取得する。`CUxTheme::GetInt`(DrawUtil.cpp:1859)。
+    pub fn get_int(&self, part_id: i32, state_id: i32, prop_id: i32) -> Option<i32> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        // SAFETY: 整数値は戻り値で返る。
+        unsafe { GetThemeInt(self.htheme, part_id, state_id, THEME_PROPERTY_SYMBOL_ID(prop_id as u32)) }
+            .ok()
+    }
+
+    /// パーツの推奨サイズ(`TS_TRUE`)を取得する。`CUxTheme::GetPartSize`(DrawUtil.cpp:1867)。
+    pub fn get_part_size(&self, hdc: HDC, part_id: i32, state_id: i32) -> Option<SIZE> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        // SAFETY: htheme/hdc は有効。サイズは戻り値で返る。
+        unsafe { GetThemePartSize(self.htheme, Some(hdc), part_id, state_id, None, TS_TRUE) }.ok()
+    }
+
+    /// 状態遷移の所要時間(ms)を取得する。`CUxTheme::GetTransitionDuration`(DrawUtil.cpp:1884)。
+    pub fn get_transition_duration(
+        &self,
+        part_id: i32,
+        state_id_from: i32,
+        state_id_to: i32,
+    ) -> Option<u32> {
+        if self.htheme.0 == 0 {
+            return None;
+        }
+        // SAFETY: 遷移時間は戻り値で返る。
+        unsafe {
+            GetThemeTransitionDuration(
+                self.htheme,
+                part_id,
+                state_id_from,
+                state_id_to,
+                TMT_TRANSITIONDURATIONS,
+            )
+        }
+        .ok()
+    }
+}
+
+impl Default for UxTheme {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for UxTheme {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2889,5 +3188,44 @@ mod tests {
         let mut b = Bitmap::new();
         assert!(b.create(8, 8, 32));
         assert!(resize_bitmap(b.handle(), 0, 10, 24, STRETCH_HALFTONE).is_none());
+    }
+
+    // ----- UxTheme -----
+
+    #[test]
+    fn test_uxtheme_not_open_returns_false_none() {
+        let t = UxTheme::new();
+        assert!(!t.is_open());
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 10,
+        };
+        // 未オープンでは描画系は false、取得系は None。
+        assert!(!t.draw_background(HDC::default(), 1, 1, &rc));
+        assert!(!t.draw_background_with_base(HDC::default(), 1, 1, 0, 0, &rc));
+        assert!(t.get_margins(1, 1, 3601).is_none());
+        assert!(t.get_color(1, 1, 3801).is_none());
+        assert!(t.get_int(1, 1, 2403).is_none());
+        assert!(t.get_part_size(HDC::default(), 1, 1).is_none());
+        assert!(t.get_transition_duration(1, 1, 2).is_none());
+    }
+
+    #[test]
+    fn test_uxtheme_is_active_does_not_panic() {
+        let t = UxTheme::new();
+        let _ = t.is_active();
+    }
+
+    #[test]
+    fn test_uxtheme_open_close() {
+        let mut t = UxTheme::new();
+        let class: Vec<u16> = "BUTTON\0".encode_utf16().collect();
+        // テーマ環境なら open 成功(成否は環境依存だがパニックしないこと)。
+        let opened = t.open(HWND::default(), PCWSTR(class.as_ptr()), 0);
+        assert_eq!(opened, t.is_open());
+        t.close();
+        assert!(!t.is_open());
     }
 }
