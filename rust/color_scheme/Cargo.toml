@@ -1,0 +1,16 @@
+# TVTest の CColorScheme(src/ColorScheme.h)の索引定数と、色取得の抽象トレイトを提供するクレート。
+# 巨大な既定色データテーブルと Load/Save(CSettings)は後続段で追加予定。現段階は ThemeManager が
+# 必要とする「色/グラデーション/枠線の索引」と ColorSchemeSource トレイトのみを提供する。
+[package]
+name = "tvtest_color_scheme"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Color scheme indices (ColorScheme.h enums) and the ColorSchemeSource trait for TVTest's theme system"
+
+[lib]
+name = "tvtest_color_scheme"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_theme = { path = "../theme" }

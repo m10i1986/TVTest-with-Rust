@@ -1,0 +1,17 @@
+# TVTest の CThemeManager(src/ThemeManager.cpp / src/ThemeManager.h)を Rust へ移植したクレート。
+# スタイル索引(STYLE_*)→ 色設定(ColorSchemeSource)の対応表 m_StyleList を用い、
+# Theme::Style/FillStyle/BorderStyle 等を組み立てる。
+[package]
+name = "tvtest_theme_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CThemeManager (style table -> theme style builder over a color scheme)"
+
+[lib]
+name = "tvtest_theme_manager"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_theme = { path = "../theme" }
+tvtest_color_scheme = { path = "../color_scheme" }
