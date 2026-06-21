@@ -1,0 +1,23 @@
+# TVTest の Style モジュール(src/Style.cpp / src/Style.h)を Rust へ移植したクレート。
+# DPI 対応の値型(IntValue/Size/Margins)・スタイル値マップ(StyleManager)・
+# DPI スケーリング演算(StyleScaling)を提供する。Theme/ThemeDraw/各 UI の土台。
+[package]
+name = "tvtest_style"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's Style module (DPI-aware value types, style value map, DPI scaling), using windows-rs"
+
+[lib]
+name = "tvtest_style"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_dpi_util = { path = "../dpi_util" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+]
