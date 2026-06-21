@@ -1,0 +1,23 @@
+# TVTest の Theme 名前空間(src/Theme.cpp / src/Theme.h)を Rust へ移植したクレート。
+# 色・塗り・グラデーション・枠線のスタイル構造体と、それらの GDI 描画関数を提供する。
+# 描画は DrawUtil 移植クレート(tvtest_draw_util)の上に乗る。
+[package]
+name = "tvtest_theme"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's Theme namespace (solid/gradient/border style structs and drawing), using windows-rs"
+
+[lib]
+name = "tvtest_theme"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_draw_util = { path = "../draw_util" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+]
