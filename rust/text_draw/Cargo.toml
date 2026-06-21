@@ -1,0 +1,13 @@
+# TVTest の CTextDraw(src/TextDraw.cpp)のうち、プラットフォーム非依存な行レイアウト
+# (日本語禁則処理・行分割・行数計算)を移植したクレート。文字幅測定(GDI/DirectWrite)は
+# FitCharCounter トレイトで抽象化する。
+[package]
+name = "tvtest_text_draw"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CTextDraw line layout (Japanese kinsoku line-breaking, line counting); text measurement is abstracted via a trait"
+
+[lib]
+name = "tvtest_text_draw"
+path = "src/lib.rs"
