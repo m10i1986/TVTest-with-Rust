@@ -1,0 +1,15 @@
+# TVTest の CColorPalette(src/ColorPalette.cpp)のモデル層を移植したクレート。
+# 16 色×N 行のカラーパレットの状態(色配列・選択/ホットの管理・色検索)と、
+# クライアント領域サイズに基づくグリッド幾何(項目矩形・ヒットテスト)を扱う。
+# 描画/ツールチップ/ウィンドウ実装(Win32)は対象外で、純粋ロジックのみのため
+# プラットフォーム非依存。
+[package]
+name = "tvtest_color_palette"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CColorPalette model layer (palette state and grid geometry)"
+
+[lib]
+name = "tvtest_color_palette"
+path = "src/lib.rs"
