@@ -1,0 +1,26 @@
+# TVTest の CThemeDraw(src/ThemeDraw.cpp / src/ThemeDraw.h)を Rust へ移植したクレート。
+# HDC と StyleScaling を保持し、枠幅を DPI スケール(ToPixels)してから Theme の描画へ委譲する。
+[package]
+name = "tvtest_theme_draw"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CThemeDraw (HDC + DPI-scaled theme drawing), using windows-rs"
+
+[lib]
+name = "tvtest_theme_draw"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_theme = { path = "../theme" }
+tvtest_style = { path = "../style" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+]
+
+[target.'cfg(windows)'.dev-dependencies]
+tvtest_draw_util = { path = "../draw_util" }

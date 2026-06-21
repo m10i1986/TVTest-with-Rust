@@ -12,6 +12,7 @@
 use tvtest_draw_util::{
     draw_text, fill, fill_glossy_gradient, fill_gradient, fill_interlaced_gradient, FillDirection,
 };
+pub use tvtest_style::IntValue;
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetDCPenColor, GetStockObject, LineTo, MoveToEx, Rectangle, SelectObject, SetDCPenColor, DC_PEN,
@@ -181,38 +182,40 @@ pub enum BorderType {
     Raised,
 }
 
-/// 枠線の各辺幅。原実装 `Theme::BorderWidth`(Theme.h:120)。各辺の既定値は 1。
+/// 枠線の各辺幅。原実装 `Theme::BorderWidth`(Theme.h:120)。各辺は単位付きの [`IntValue`]。
 ///
-/// 原実装の `Style::IntValue`(DPI スケール対応の値型)は、Theme.cpp が整数値のみを使うため
-/// `i32` でモデル化する。
+/// 原実装どおり各辺は `Style::IntValue`(値 + DPI 単位)。`Theme::Draw` 自体は値(`.value`)のみを
+/// 画素として用いるが、単位は [`tvtest_theme_draw`] 相当の DPI スケーリング(`ToPixels`)で参照される。
+/// 各辺の既定は値 1・単位 `LogicalPixel`(Theme.h:122 `Style::IntValue {1}`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BorderWidth {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
+    pub left: IntValue,
+    pub top: IntValue,
+    pub right: IntValue,
+    pub bottom: IntValue,
 }
 
 impl Default for BorderWidth {
-    /// 全辺 1(Theme.h:122-125)。
+    /// 全辺 値 1・単位 LogicalPixel(Theme.h:122-125)。
     fn default() -> Self {
         Self {
-            left: 1,
-            top: 1,
-            right: 1,
-            bottom: 1,
+            left: IntValue::with_logical(1),
+            top: IntValue::with_logical(1),
+            right: IntValue::with_logical(1),
+            bottom: IntValue::with_logical(1),
         }
     }
 }
 
 impl BorderWidth {
-    /// 全辺同一幅で生成(`BorderWidth(int Width)`、Theme.h:128)。
+    /// 全辺同一幅で生成(`BorderWidth(int Width)`、Theme.h:128)。単位は LogicalPixel。
     pub fn uniform(width: i32) -> Self {
+        let value = IntValue::with_logical(width);
         Self {
-            left: width,
-            top: width,
-            right: width,
-            bottom: width,
+            left: value,
+            top: value,
+            right: value,
+            bottom: value,
         }
     }
 }
@@ -361,10 +364,10 @@ pub fn mix_style(style1: &FillStyle, style2: &FillStyle, ratio: u8) -> FillStyle
 /// 枠線幅だけ矩形を外側へ広げる(`AddBorderRect`、Theme.cpp:352)。
 pub fn add_border_rect(style: &BorderStyle, rect: &mut RECT) -> bool {
     if style.kind != BorderType::None {
-        rect.left -= style.width.left;
-        rect.top -= style.width.top;
-        rect.right += style.width.right;
-        rect.bottom += style.width.bottom;
+        rect.left -= style.width.left.value;
+        rect.top -= style.width.top.value;
+        rect.right += style.width.right.value;
+        rect.bottom += style.width.bottom.value;
     }
     true
 }
@@ -372,10 +375,10 @@ pub fn add_border_rect(style: &BorderStyle, rect: &mut RECT) -> bool {
 /// 枠線幅だけ矩形を内側へ縮める(`SubtractBorderRect`、Theme.cpp:366)。
 pub fn subtract_border_rect(style: &BorderStyle, rect: &mut RECT) -> bool {
     if style.kind != BorderType::None {
-        rect.left += style.width.left;
-        rect.top += style.width.top;
-        rect.right -= style.width.right;
-        rect.bottom -= style.width.bottom;
+        rect.left += style.width.left.value;
+        rect.top += style.width.top.value;
+        rect.right -= style.width.right.value;
+        rect.bottom -= style.width.bottom.value;
     }
     true
 }
@@ -385,10 +388,10 @@ pub fn subtract_border_rect(style: &BorderStyle, rect: &mut RECT) -> bool {
 /// 枠線が `None` のときは矩形を空(全 0)にする。
 pub fn get_border_widths(style: &BorderStyle, rect: &mut RECT) -> bool {
     if style.kind != BorderType::None {
-        rect.left = style.width.left;
-        rect.top = style.width.top;
-        rect.right = style.width.right;
-        rect.bottom = style.width.bottom;
+        rect.left = style.width.left.value;
+        rect.top = style.width.top.value;
+        rect.right = style.width.right.value;
+        rect.bottom = style.width.bottom.value;
     } else {
         *rect = RECT {
             left: 0,
@@ -571,7 +574,10 @@ pub fn draw_border_rect(hdc: HDC, rect: &mut RECT, style: &BorderStyle) -> bool 
 
     let rc = *rect;
 
-    if style.width.left == 1 && style.width.top == 1 && style.width.right == 1 && style.width.bottom == 1
+    if style.width.left.eq_value(1)
+        && style.width.top.eq_value(1)
+        && style.width.right.eq_value(1)
+        && style.width.bottom.eq_value(1)
     {
         // SAFETY: hdc は有効。DC ペン/NULL ブラシを選択して 1px 枠を描き、状態を元へ戻す。
         unsafe {
@@ -619,28 +625,28 @@ pub fn draw_border_rect(hdc: HDC, rect: &mut RECT, style: &BorderStyle) -> bool 
         };
 
         let mut rc = rc;
-        if style.width.top > 0 {
-            fill_border(hdc, &rc, rc.left, rc.top, rc.right, rc.top + style.width.top, color1);
-            rc.top += style.width.top;
+        if style.width.top.value > 0 {
+            fill_border(hdc, &rc, rc.left, rc.top, rc.right, rc.top + style.width.top.value, color1);
+            rc.top += style.width.top.value;
         }
-        if style.width.bottom > 0 {
+        if style.width.bottom.value > 0 {
             fill_border(
                 hdc,
                 &rc,
                 rc.left,
-                rc.bottom - style.width.bottom,
+                rc.bottom - style.width.bottom.value,
                 rc.right,
                 rc.bottom,
                 color2,
             );
-            rc.bottom -= style.width.bottom;
+            rc.bottom -= style.width.bottom.value;
         }
-        if style.width.left > 0 {
-            fill_border(hdc, &rc, rc.left, rc.top, rc.left + style.width.left, rc.bottom, color1);
-            rc.left += style.width.left;
+        if style.width.left.value > 0 {
+            fill_border(hdc, &rc, rc.left, rc.top, rc.left + style.width.left.value, rc.bottom, color1);
+            rc.left += style.width.left.value;
         }
-        if style.width.right > 0 {
-            fill_border(hdc, &rc, rc.right - style.width.right, rc.top, rc.right, rc.bottom, color2);
+        if style.width.right.value > 0 {
+            fill_border(hdc, &rc, rc.right - style.width.right.value, rc.top, rc.right, rc.bottom, color2);
         }
     }
 
@@ -903,10 +909,10 @@ mod tests {
             kind: BorderType::Solid,
             color: ThemeColor::from_rgb(0, 0, 0),
             width: BorderWidth {
-                left: 2,
-                top: 3,
-                right: 4,
-                bottom: 5,
+                left: IntValue::with_logical(2),
+                top: IntValue::with_logical(3),
+                right: IntValue::with_logical(4),
+                bottom: IntValue::with_logical(5),
             },
         };
         let mut r = rc(10, 10, 100, 100);
@@ -932,10 +938,10 @@ mod tests {
             kind: BorderType::Solid,
             color: ThemeColor::default(),
             width: BorderWidth {
-                left: 2,
-                top: 3,
-                right: 4,
-                bottom: 5,
+                left: IntValue::with_logical(2),
+                top: IntValue::with_logical(3),
+                right: IntValue::with_logical(4),
+                bottom: IntValue::with_logical(5),
             },
         };
         let mut r = rc(0, 0, 0, 0);
@@ -969,8 +975,24 @@ mod tests {
 
     #[test]
     fn defaults() {
-        assert_eq!(BorderWidth::default(), BorderWidth { left: 1, top: 1, right: 1, bottom: 1 });
-        assert_eq!(BorderWidth::uniform(3), BorderWidth { left: 3, top: 3, right: 3, bottom: 3 });
+        assert_eq!(
+            BorderWidth::default(),
+            BorderWidth {
+                left: IntValue::with_logical(1),
+                top: IntValue::with_logical(1),
+                right: IntValue::with_logical(1),
+                bottom: IntValue::with_logical(1),
+            }
+        );
+        assert_eq!(
+            BorderWidth::uniform(3),
+            BorderWidth {
+                left: IntValue::with_logical(3),
+                top: IntValue::with_logical(3),
+                right: IntValue::with_logical(3),
+                bottom: IntValue::with_logical(3),
+            }
+        );
         assert_eq!(FillStyle::default().kind, FillType::None);
         assert_eq!(BorderStyle::default().kind, BorderType::None);
         assert_eq!(BorderStyle::default().width, BorderWidth::default());
@@ -1080,10 +1102,10 @@ mod tests {
             kind: BorderType::Raised,
             color: ThemeColor::from_rgb(100, 100, 100),
             width: BorderWidth {
-                left: 2,
-                top: 3,
-                right: 4,
-                bottom: 5,
+                left: IntValue::with_logical(2),
+                top: IntValue::with_logical(3),
+                right: IntValue::with_logical(4),
+                bottom: IntValue::with_logical(5),
             },
         };
         assert!(draw_border_rect(off.dc(), &mut r2, &style));

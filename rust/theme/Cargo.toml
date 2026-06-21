@@ -14,6 +14,7 @@ path = "src/lib.rs"
 
 [target.'cfg(windows)'.dependencies]
 tvtest_draw_util = { path = "../draw_util" }
+tvtest_style = { path = "../style" }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
