@@ -34,30 +34,32 @@ use core::ffi::c_void;
 use core::ptr::{copy_nonoverlapping, null_mut};
 use std::mem::{size_of, transmute};
 
-use windows::core::{s, w, PCWSTR};
+use windows::core::{s, w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, BitBlt, CreateBrushIndirect, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateDIBSection, CreateFontIndirectW, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
-    GetCurrentObject, GetDC, GetDCPenColor, GetDIBColorTable, GetObjectW, GetStockObject,
-    GetTextFaceW, GetTextMetricsW, GradientFill, LineTo, MoveToEx, ReleaseDC, SelectObject,
-    SetDCBrushColor, SetDCPenColor, SetDIBColorTable, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
-    AC_SRC_OVER, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN,
-    DEFAULT_GUI_FONT, DIBSECTION, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, FW_NORMAL, GRADIENT_FILL_RECT_H,
-    GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGBRUSH, LOGFONTW,
-    OBJ_BITMAP, RGBQUAD, SRCCOPY, STRETCH_BLT_MODE, TEXTMETRICW, TRIVERTEX,
+    AlphaBlend, BitBlt, CreateBitmap, CreateBrushIndirect, CreateCompatibleBitmap,
+    CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush, DeleteDC,
+    DeleteObject, DrawTextW, FillRect, GetCurrentObject, GetDC, GetDCPenColor, GetDIBColorTable,
+    GetObjectW, GetStockObject, GetTextFaceW, GetTextMetricsW, GradientFill, LineTo, MoveToEx,
+    ReleaseDC, SelectObject, SetBkMode, SetDCBrushColor, SetDCPenColor, SetDIBColorTable,
+    SetStretchBltMode, SetTextColor, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BACKGROUND_MODE, BITMAP,
+    BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DC_BRUSH, DC_PEN, DEFAULT_GUI_FONT, DIBSECTION,
+    DIB_RGB_COLORS, DRAW_TEXT_FORMAT, FW_NORMAL, GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V,
+    GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGBRUSH, LOGFONTW, OBJ_BITMAP, RGBQUAD,
+    SRCCOPY, STRETCH_BLT_MODE, STRETCH_HALFTONE, TEXTMETRICW, TRANSPARENT, TRIVERTEX,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::UI::Controls::{
     CloseThemeData, DrawThemeBackground, DrawThemeText, GetThemeColor, GetThemeFont, GetThemeInt,
     GetThemeMargins, GetThemePartSize, GetThemeSysFont, GetThemeTextExtent,
-    GetThemeTransitionDuration, IsAppThemed, IsThemeBackgroundPartiallyTransparent, OpenThemeData,
-    HTHEME, MARGINS, THEME_PROPERTY_SYMBOL_ID, TS_TRUE,
+    GetThemeTransitionDuration, ImageList_Add, ImageList_Create, ImageList_Destroy, IsAppThemed,
+    IsThemeBackgroundPartiallyTransparent, OpenThemeData, HIMAGELIST, HTHEME, ILC_COLOR32, MARGINS,
+    THEME_PROPERTY_SYMBOL_ID, TS_TRUE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CopyImage, SystemParametersInfoW, FE_FONTSMOOTHINGCLEARTYPE, IMAGE_BITMAP, IMAGE_FLAGS,
-    NONCLIENTMETRICSW, SPI_GETFONTSMOOTHING, SPI_GETFONTSMOOTHINGTYPE, SPI_GETNONCLIENTMETRICS,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    CopyImage, CreateIconIndirect, SystemParametersInfoW, FE_FONTSMOOTHINGCLEARTYPE, HICON,
+    ICONINFO, IMAGE_BITMAP, IMAGE_FLAGS, NONCLIENTMETRICSW, SPI_GETFONTSMOOTHING,
+    SPI_GETFONTSMOOTHINGTYPE, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
 };
 
 use tvtest_dpi_util::mul_div;
@@ -66,6 +68,9 @@ use tvtest_winutil::is_windows_10_creators_update_or_later;
 
 /// 白(`RGB(255, 255, 255)`)の `COLORREF`。
 const WHITE: u32 = 0x00FF_FFFF;
+
+/// 無効な色を表す `COLORREF`(`CLR_INVALID`)。
+const CLR_INVALID: u32 = 0xFFFF_FFFF;
 
 // COLORREF の各チャンネル取り出し(GetRValue / GetGValue / GetBValue 相当)。
 #[inline]
@@ -2450,6 +2455,723 @@ impl Drop for UxTheme {
     }
 }
 
+// ---------------------------------------------------------------------------
+// テキスト描画(DrawUtil.cpp)
+// ---------------------------------------------------------------------------
+
+/// テキストを描画する。`DrawUtil::DrawText`(DrawUtil.cpp:668)。
+///
+/// 背景は常に透過(`SetBkMode(TRANSPARENT)`)で描画する。`font` が `Some` ならそのフォントを
+/// 選択し、`color` が `Some` なら文字色を設定して描画する(いずれも描画後に元の値へ戻す)。
+/// `hdc` が無効なら `false`。`text` は終端 NUL を含まないワイド文字列スライス。
+///
+/// 原実装は `RECT` をローカルにコピーして描画するため、`DT_CALCRECT` を指定しても
+/// 呼び出し側の `rect` は変化しない(この挙動を踏襲する)。
+pub fn draw_text(
+    hdc: HDC,
+    text: &[u16],
+    rect: &RECT,
+    format: DRAW_TEXT_FORMAT,
+    font: Option<&Font>,
+    color: Option<u32>,
+) -> bool {
+    if hdc.0.is_null() {
+        return false;
+    }
+    // SAFETY: hdc は有効。変更した DC 状態(背景モード/文字色/フォント)は描画後に元へ戻す。
+    unsafe {
+        let old_bk_mode = SetBkMode(hdc, TRANSPARENT);
+        let old_text_color = color.map(|c| SetTextColor(hdc, COLORREF(c)));
+        let old_font = font.map(|f| SelectObject(hdc, HGDIOBJ(f.handle().0)));
+        let mut buffer = text.to_vec();
+        let mut rc = *rect;
+        // 空文字列の描画は原実装でも no-op。空スライス(ダングリングポインタ)を
+        // DrawTextW に渡さないようガードする。
+        if !buffer.is_empty() {
+            let _ = DrawTextW(hdc, &mut buffer, &mut rc, format);
+        }
+        if let Some(of) = old_font {
+            SelectObject(hdc, of);
+        }
+        if let Some(otc) = old_text_color {
+            SetTextColor(hdc, otc);
+        }
+        SetBkMode(hdc, BACKGROUND_MODE(old_bk_mode as u32));
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------
+// 単色化ビットマップ(DrawUtil::CMonoColorBitmap、DrawUtil.h:197 / DrawUtil.cpp:1111)
+// ---------------------------------------------------------------------------
+
+/// アルファチャンネルを持つ単色化可能なビットマップ。原実装 `DrawUtil::CMonoColorBitmap`。
+///
+/// 8/24bpp のソースからは「アルファのみ」を取り出し任意色で塗れる単色画像
+/// (`color_image == false`)、32bpp のソースからはそのままのカラー画像
+/// (`color_image == true`)を保持する。いずれも内部は 32bpp のプリマルチプライ済み
+/// DIB として描画する。
+///
+/// リソースからの読み込み(`Load` = `LoadImage`)は実リソースが必要でテスト不能なため未移植
+/// (続44-7 の [`Bitmap`] と同様)。`HBITMAP` を入力に取る [`create`](Self::create) を中核とする。
+pub struct MonoColorBitmap {
+    hbm: HBITMAP,
+    hbm_premultiplied: HBITMAP,
+    color: u32,
+    color_image: bool,
+}
+
+impl MonoColorBitmap {
+    /// 空(未生成)を作る。
+    pub fn new() -> Self {
+        Self {
+            hbm: HBITMAP::default(),
+            hbm_premultiplied: HBITMAP::default(),
+            color: CLR_INVALID,
+            color_image: false,
+        }
+    }
+
+    /// ソースビットマップから生成する。`CMonoColorBitmap::Create`(DrawUtil.cpp:1171)。
+    ///
+    /// `hbm_src` は 8/24/32bpp の DIB(`bmBits` 有効)である必要がある。それ以外は `false`。
+    pub fn create(&mut self, hbm_src: HBITMAP) -> bool {
+        self.destroy();
+        if hbm_src.0.is_null() {
+            return false;
+        }
+
+        // SAFETY: hbm_src は GDI ビットマップハンドル。BITMAP 情報を取得する。
+        let mut bm = BITMAP::default();
+        unsafe {
+            GetObjectW(
+                HGDIOBJ(hbm_src.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            );
+        }
+        if (bm.bmBitsPixel != 8 && bm.bmBitsPixel != 24 && bm.bmBitsPixel != 32)
+            || bm.bmBits.is_null()
+        {
+            return false;
+        }
+
+        let Some((hbm, p_bits)) = create_dib_with_bits(bm.bmWidth, bm.bmHeight, 32) else {
+            return false;
+        };
+        self.hbm = hbm;
+
+        if bm.bmBitsPixel == 32 {
+            self.color_image = true;
+            // SAFETY: 32bpp は行パディングなし(幅*4=行バイト)のため連続コピー可。
+            unsafe {
+                copy_nonoverlapping(
+                    bm.bmBits as *const u8,
+                    p_bits as *mut u8,
+                    (bm.bmWidth * 4 * bm.bmHeight) as usize,
+                );
+            }
+
+            let Some((hbm_pm, pm_bits)) = create_dib_with_bits(bm.bmWidth, bm.bmHeight, 32) else {
+                self.destroy();
+                return false;
+            };
+            self.hbm_premultiplied = hbm_pm;
+            // SAFETY: p_bits / pm_bits とも幅*高さ*4 バイト。各画素をプリマルチプライする。
+            unsafe {
+                let mut p = p_bits as *const u8;
+                let mut q = pm_bits as *mut u8;
+                for _ in 0..(bm.bmWidth * bm.bmHeight) {
+                    let alpha = *p.add(3) as u32;
+                    *q.add(0) = divide_by_255(*p.add(0) as u32 * alpha);
+                    *q.add(1) = divide_by_255(*p.add(1) as u32 * alpha);
+                    *q.add(2) = divide_by_255(*p.add(2) as u32 * alpha);
+                    *q.add(3) = alpha as u8;
+                    p = p.add(4);
+                    q = q.add(4);
+                }
+            }
+        } else {
+            self.color_image = false;
+            self.hbm_premultiplied = self.hbm;
+
+            let row_bytes = ((bm.bmWidth * bm.bmBitsPixel as i32 + 31) / 32 * 4) as usize;
+            // SAFETY: ソース行は row_bytes、出力は幅*4。先頭バイト(8bpp は値・24bpp は B)を
+            // アルファとして取り出す。
+            unsafe {
+                let mut p = bm.bmBits as *const u8;
+                let mut q = p_bits as *mut u8;
+                for _ in 0..bm.bmHeight {
+                    if bm.bmBitsPixel == 8 {
+                        for x in 0..bm.bmWidth as usize {
+                            *q.add(3) = *p.add(x);
+                            q = q.add(4);
+                        }
+                    } else {
+                        for x in 0..bm.bmWidth as usize {
+                            *q.add(3) = *p.add(x * 3);
+                            q = q.add(4);
+                        }
+                    }
+                    p = p.add(row_bytes);
+                }
+            }
+        }
+
+        self.color = CLR_INVALID;
+        true
+    }
+
+    /// 破棄する。`CMonoColorBitmap::Destroy`(DrawUtil.cpp:1240)。
+    pub fn destroy(&mut self) {
+        if !self.hbm_premultiplied.0.is_null() {
+            if self.hbm_premultiplied.0 != self.hbm.0 {
+                // SAFETY: 自身が所有するプリマルチプライ済み DIB(本体と別個の場合のみ解放)。
+                unsafe {
+                    let _ = DeleteObject(HGDIOBJ(self.hbm_premultiplied.0));
+                }
+            }
+            self.hbm_premultiplied = HBITMAP::default();
+        }
+        if !self.hbm.0.is_null() {
+            // SAFETY: 自身が所有する DIB。
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.hbm.0));
+            }
+            self.hbm = HBITMAP::default();
+        }
+    }
+
+    /// ハンドルを取得する(`GetHandle`、DrawUtil.h:212)。
+    pub fn handle(&self) -> HBITMAP {
+        self.hbm
+    }
+
+    /// 生成済みかどうか(`IsCreated`、DrawUtil.h:213)。
+    pub fn is_created(&self) -> bool {
+        !self.hbm.0.is_null()
+    }
+
+    /// プリマルチプライ済み DIB を `color` で塗り直す。`CMonoColorBitmap::SetColor`(DrawUtil.cpp:1411)。
+    fn set_color(&mut self, color: u32) {
+        if self.color == color {
+            return;
+        }
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm_premultiplied から BITMAP 取得(未生成なら 0 が返り何もしない)。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm_premultiplied.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got != size_of::<BITMAP>() as i32 {
+            return;
+        }
+        let (red, green, blue) = (get_r(color), get_g(color), get_b(color));
+        // SAFETY: bm.bmBits は 32bpp DIB のビット。アルファを保ち色を載せる。
+        unsafe {
+            let mut p = bm.bmBits as *mut u8;
+            for _ in 0..(bm.bmWidth * bm.bmHeight) {
+                let alpha = *p.add(3) as u32;
+                *p.add(0) = divide_by_255(blue * alpha);
+                *p.add(1) = divide_by_255(green * alpha);
+                *p.add(2) = divide_by_255(red * alpha);
+                p = p.add(4);
+            }
+        }
+        self.color = color;
+    }
+
+    /// 指定矩形へ描画する。`CMonoColorBitmap::Draw`(DrawUtil.cpp:1254)。
+    ///
+    /// `src_width`/`src_height` が 0 以下ならビットマップ全体、`dst_width`/`dst_height` が
+    /// 0 以下ならソースと同じサイズを使う。ソース範囲が画像外なら `false`。
+    /// 単色画像のときは描画前に `color` で塗り直す。
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &mut self,
+        hdc: HDC,
+        dst_x: i32,
+        dst_y: i32,
+        dst_width: i32,
+        dst_height: i32,
+        src_x: i32,
+        src_y: i32,
+        src_width: i32,
+        src_height: i32,
+        color: u32,
+        opacity: u8,
+    ) -> bool {
+        if self.hbm_premultiplied.0.is_null() {
+            return false;
+        }
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm_premultiplied は有効。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm_premultiplied.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got != size_of::<BITMAP>() as i32 {
+            return false;
+        }
+        let src_width = if src_width <= 0 { bm.bmWidth } else { src_width };
+        let dst_width = if dst_width <= 0 { src_width } else { dst_width };
+        let src_height = if src_height <= 0 { bm.bmHeight } else { src_height };
+        let dst_height = if dst_height <= 0 { src_height } else { dst_height };
+        if src_x < 0
+            || src_y < 0
+            || src_x + src_width > bm.bmWidth
+            || src_y + src_height > bm.bmHeight
+        {
+            return false;
+        }
+        if !self.color_image {
+            self.set_color(color);
+        }
+        // SAFETY: hdc は呼び出し側保証。作業 DC は自前生成・破棄する。
+        let hdc_memory = unsafe { CreateCompatibleDC(Some(hdc)) };
+        if hdc_memory.0.is_null() {
+            return false;
+        }
+        // SAFETY: hdc_memory に対象 DIB を選択して AlphaBlend で合成する。
+        unsafe {
+            let hbm_old = SelectObject(hdc_memory, HGDIOBJ(self.hbm_premultiplied.0));
+            let bf = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: opacity,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            };
+            let _ = AlphaBlend(
+                hdc, dst_x, dst_y, dst_width, dst_height, hdc_memory, src_x, src_y, src_width,
+                src_height, bf,
+            );
+            SelectObject(hdc_memory, hbm_old);
+            let _ = DeleteDC(hdc_memory);
+        }
+        true
+    }
+
+    /// 左上位置を指定して描画する(`Draw` のサイズ簡易版、DrawUtil.cpp:1295)。
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_at(
+        &mut self,
+        hdc: HDC,
+        dst_x: i32,
+        dst_y: i32,
+        color: u32,
+        opacity: u8,
+        src_x: i32,
+        src_y: i32,
+        width: i32,
+        height: i32,
+    ) -> bool {
+        self.draw(
+            hdc, dst_x, dst_y, width, height, src_x, src_y, width, height, color, opacity,
+        )
+    }
+
+    /// 部分領域を 32bpp DIB として取り出す。`CMonoColorBitmap::ExtractBitmap`(DrawUtil.cpp:1329)。
+    ///
+    /// 単色画像のときは `color` で着色し、カラー画像のときはそのままコピーする。
+    /// 範囲外や未生成は `None`。返した `HBITMAP` は呼び出し側が `DeleteObject` で破棄する。
+    pub fn extract_bitmap(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        color: u32,
+    ) -> Option<HBITMAP> {
+        if self.hbm.0.is_null() || x < 0 || y < 0 {
+            return None;
+        }
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm は有効。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got != size_of::<BITMAP>() as i32 || x + width > bm.bmWidth || y + height > bm.bmHeight {
+            return None;
+        }
+        let (hbm, p_bits) = create_dib_with_bits(width, height, 32)?;
+        // SAFETY: 原実装どおりボトムアップ DIB の行・画素を走査する。
+        unsafe {
+            let mut p = (bm.bmBits as *const u8)
+                .add(((bm.bmHeight - (y + height)) * bm.bmWidthBytes + x * 4) as usize);
+            let mut q = p_bits as *mut u8;
+            if self.color_image {
+                for _ in 0..height {
+                    copy_nonoverlapping(p, q, (width * 4) as usize);
+                    p = p.add(bm.bmWidthBytes as usize);
+                    q = q.add((width * 4) as usize);
+                }
+            } else {
+                let (red, green, blue) =
+                    (get_r(color) as u8, get_g(color) as u8, get_b(color) as u8);
+                for _ in 0..height {
+                    for _ in 0..width {
+                        *q.add(0) = blue;
+                        *q.add(1) = green;
+                        *q.add(2) = red;
+                        *q.add(3) = *p.add(3);
+                        p = p.add(4);
+                        q = q.add(4);
+                    }
+                    p = p.add((bm.bmWidthBytes - width * 4) as usize);
+                }
+            }
+        }
+        Some(hbm)
+    }
+
+    /// 画像全体に対応するイメージリストを生成する。`CMonoColorBitmap::CreateImageList`(DrawUtil.cpp:1302)。
+    ///
+    /// 失敗時 `None`。返した `HIMAGELIST` は呼び出し側が `ImageList_Destroy` で破棄する。
+    pub fn create_image_list(&self, icon_width: i32, color: u32) -> Option<HIMAGELIST> {
+        if self.hbm.0.is_null() || icon_width < 1 {
+            return None;
+        }
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm は有効。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got != size_of::<BITMAP>() as i32 || bm.bmWidth < icon_width {
+            return None;
+        }
+        // SAFETY: ImageList_Create は失敗時 NULL(=0)を返す。
+        let himl = unsafe { ImageList_Create(icon_width, bm.bmHeight, ILC_COLOR32, 0, 1) };
+        if himl.0 == 0 {
+            return None;
+        }
+        let Some(hbm) = self.extract_bitmap(0, 0, bm.bmWidth, bm.bmHeight, color) else {
+            // SAFETY: 直前に生成したイメージリストを破棄する。
+            unsafe {
+                let _ = ImageList_Destroy(Some(himl));
+            }
+            return None;
+        };
+        // SAFETY: hbm は本関数が生成・破棄する(マスクは無し)。
+        unsafe {
+            ImageList_Add(himl, hbm, None);
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+        }
+        Some(himl)
+    }
+
+    /// 部分領域をアイコンとして取り出す。`CMonoColorBitmap::ExtractIcon`(DrawUtil.cpp:1372)。
+    ///
+    /// 生成失敗時 `None`。返した `HICON` は呼び出し側が `DestroyIcon` で破棄する。
+    pub fn extract_icon(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        color: u32,
+    ) -> Option<HICON> {
+        let hbm_color = self.extract_bitmap(x, y, width, height, color)?;
+        // SAFETY: 1bpp のマスクビットマップ。失敗時 NULL。
+        let hbm_mask = unsafe { CreateBitmap(width, height, 1, 1, None) };
+        if hbm_mask.0.is_null() {
+            // SAFETY: 直前に取り出したカラービットマップを破棄する。
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(hbm_color.0));
+            }
+            return None;
+        }
+        let ii = ICONINFO {
+            fIcon: BOOL(1),
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: hbm_mask,
+            hbmColor: hbm_color,
+        };
+        // SAFETY: ii の各ビットマップは有効。CreateIconIndirect 後に元ビットマップを破棄する。
+        let hico = unsafe { CreateIconIndirect(&ii) };
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(hbm_mask.0));
+            let _ = DeleteObject(HGDIOBJ(hbm_color.0));
+        }
+        match hico {
+            Ok(h) if !h.0.is_null() => Some(h),
+            _ => None,
+        }
+    }
+
+    /// 画像全体をアイコンとして取り出す。`CMonoColorBitmap::ExtractIcon(COLORREF)`(DrawUtil.cpp:1399)。
+    pub fn extract_icon_full(&self, color: u32) -> Option<HICON> {
+        if self.hbm.0.is_null() {
+            return None;
+        }
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm は有効。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(self.hbm.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got != size_of::<BITMAP>() as i32 {
+            return None;
+        }
+        self.extract_icon(0, 0, bm.bmWidth, bm.bmHeight, color)
+    }
+}
+
+impl Default for MonoColorBitmap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for MonoColorBitmap {
+    fn clone(&self) -> Self {
+        // CMonoColorBitmap::operator=(DrawUtil.cpp:1126): 各 DIB を複製する。
+        // 単色画像はコピー元では本体とプリマルチプライが同一ハンドルだが、
+        // 原実装どおり両方を複製するため複製先では別個のハンドルになる。
+        let mut dst = Self::new();
+        if !self.hbm.0.is_null() {
+            if let Some(h) = duplicate_dib(self.hbm) {
+                dst.hbm = h;
+            }
+        }
+        if !self.hbm_premultiplied.0.is_null() {
+            if let Some(h) = duplicate_dib(self.hbm_premultiplied) {
+                dst.hbm_premultiplied = h;
+            }
+        }
+        dst.color = self.color;
+        dst.color_image = self.color_image;
+        dst
+    }
+}
+
+impl Drop for MonoColorBitmap {
+    fn drop(&mut self) {
+        self.destroy();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 単色化アイコンリスト(DrawUtil::CMonoColorIconList、DrawUtil.h:236 / DrawUtil.cpp:1435)
+// ---------------------------------------------------------------------------
+
+/// 横に並んだ複数アイコンを1枚の [`MonoColorBitmap`] として保持するアイコンリスト。
+/// 原実装 `DrawUtil::CMonoColorIconList`。
+///
+/// リソース読み込み(`Load`)は [`MonoColorBitmap`] と同じ理由で未移植。
+pub struct MonoColorIconList {
+    bitmap: MonoColorBitmap,
+    icon_width: i32,
+    icon_height: i32,
+}
+
+impl MonoColorIconList {
+    /// 空(未生成)を作る。
+    pub fn new() -> Self {
+        Self {
+            bitmap: MonoColorBitmap::new(),
+            icon_width: 0,
+            icon_height: 0,
+        }
+    }
+
+    /// ビットマップからそのままのサイズで生成する。`CMonoColorIconList::Create`(DrawUtil.cpp:1456)。
+    pub fn create(&mut self, hbm: HBITMAP, width: i32, height: i32) -> bool {
+        if !self.bitmap.create(hbm) {
+            return false;
+        }
+        self.icon_width = width;
+        self.icon_height = height;
+        true
+    }
+
+    /// ビットマップを拡縮して生成する。`CMonoColorIconList::Create`(5引数版、DrawUtil.cpp:1465)。
+    ///
+    /// `width`/`height` が `orig_width`/`orig_height` と異なる場合、各アイコンを `STRETCH_HALFTONE`
+    /// で拡縮した一時 DIB を作ってから取り込む。
+    pub fn create_resized(
+        &mut self,
+        hbm: HBITMAP,
+        orig_width: i32,
+        orig_height: i32,
+        width: i32,
+        height: i32,
+    ) -> bool {
+        let mut bm = BITMAP::default();
+        // SAFETY: hbm は有効。
+        let got = unsafe {
+            GetObjectW(
+                HGDIOBJ(hbm.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut c_void),
+            )
+        };
+        if got != size_of::<BITMAP>() as i32 || bm.bmWidth < orig_width || bm.bmHeight < orig_height
+        {
+            return false;
+        }
+
+        if width == orig_width && height == orig_height {
+            if !self.bitmap.create(hbm) {
+                return false;
+            }
+        } else {
+            let icon_count = bm.bmWidth / orig_width;
+            let Some(hbm_stretched) = create_dib(width * icon_count, height, 24) else {
+                return false;
+            };
+            // SAFETY: 一時 DC を2つ作り、各アイコンを StretchBlt で拡縮する。
+            unsafe {
+                let hdc_src = CreateCompatibleDC(None);
+                let hdc_dst = CreateCompatibleDC(None);
+                let hbm_src_old = SelectObject(hdc_src, HGDIOBJ(hbm.0));
+                let hbm_dst_old = SelectObject(hdc_dst, HGDIOBJ(hbm_stretched.0));
+                let old_mode = SetStretchBltMode(hdc_dst, STRETCH_HALFTONE);
+                for i in 0..icon_count {
+                    let _ = StretchBlt(
+                        hdc_dst,
+                        width * i,
+                        0,
+                        width,
+                        height,
+                        Some(hdc_src),
+                        orig_width * i,
+                        0,
+                        orig_width,
+                        orig_height,
+                        SRCCOPY,
+                    );
+                }
+                let _ = SetStretchBltMode(hdc_dst, STRETCH_BLT_MODE(old_mode));
+                SelectObject(hdc_src, hbm_src_old);
+                SelectObject(hdc_dst, hbm_dst_old);
+                let _ = DeleteDC(hdc_src);
+                let _ = DeleteDC(hdc_dst);
+            }
+            let result = self.bitmap.create(hbm_stretched);
+            // SAFETY: 一時ストレッチ DIB を破棄する。
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(hbm_stretched.0));
+            }
+            if !result {
+                return false;
+            }
+        }
+
+        self.icon_width = width;
+        self.icon_height = height;
+        true
+    }
+
+    /// 破棄する。`CMonoColorIconList::Destroy`(DrawUtil.cpp:1508)。
+    pub fn destroy(&mut self) {
+        self.bitmap.destroy();
+        self.icon_width = 0;
+        self.icon_height = 0;
+    }
+
+    /// 生成済みかどうか(`IsCreated`、DrawUtil.cpp:1515)。
+    pub fn is_created(&self) -> bool {
+        self.bitmap.is_created()
+    }
+
+    /// アイコン幅(`GetIconWidth`、DrawUtil.h:260)。
+    pub fn icon_width(&self) -> i32 {
+        self.icon_width
+    }
+
+    /// アイコン高さ(`GetIconHeight`、DrawUtil.h:261)。
+    pub fn icon_height(&self) -> i32 {
+        self.icon_height
+    }
+
+    /// 指定インデックスのアイコンを描画する。`CMonoColorIconList::Draw`(DrawUtil.cpp:1520)。
+    ///
+    /// 原実装はリサイズ時に GDI+(`Graphics::CCanvas`)で高品質拡縮するが、GDI+ ラッパーは
+    /// 未移植のため常に `AlphaBlend`([`MonoColorBitmap::draw`])で描画する(拡縮品質のみ差異)。
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &mut self,
+        hdc: HDC,
+        dst_x: i32,
+        dst_y: i32,
+        dst_width: i32,
+        dst_height: i32,
+        icon_index: i32,
+        color: u32,
+        opacity: u8,
+    ) -> bool {
+        if hdc.0.is_null() || dst_width <= 0 || dst_height <= 0 {
+            return false;
+        }
+        let icon_width = self.icon_width;
+        let icon_height = self.icon_height;
+        self.bitmap.draw(
+            hdc,
+            dst_x,
+            dst_y,
+            dst_width,
+            dst_height,
+            icon_index * icon_width,
+            0,
+            icon_width,
+            icon_height,
+            color,
+            opacity,
+        )
+    }
+
+    /// イメージリストを生成する。`CMonoColorIconList::CreateImageList`(DrawUtil.cpp:1552)。
+    pub fn create_image_list(&self, color: u32) -> Option<HIMAGELIST> {
+        self.bitmap.create_image_list(self.icon_width, color)
+    }
+
+    /// 指定インデックスのアイコンを 32bpp DIB として取り出す。`CMonoColorIconList::ExtractBitmap`(DrawUtil.cpp:1557)。
+    pub fn extract_bitmap(&self, index: i32, color: u32) -> Option<HBITMAP> {
+        self.bitmap.extract_bitmap(
+            index * self.icon_width,
+            0,
+            self.icon_width,
+            self.icon_height,
+            color,
+        )
+    }
+
+    /// 指定インデックスのアイコンを取り出す。`CMonoColorIconList::ExtractIcon`(DrawUtil.cpp:1562)。
+    pub fn extract_icon(&self, index: i32, color: u32) -> Option<HICON> {
+        self.bitmap.extract_icon(
+            index * self.icon_width,
+            0,
+            self.icon_width,
+            self.icon_height,
+            color,
+        )
+    }
+}
+
+impl Default for MonoColorIconList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3227,5 +3949,309 @@ mod tests {
         assert_eq!(opened, t.is_open());
         t.close();
         assert!(!t.is_open());
+    }
+
+    // ----- draw_text -----
+
+    #[test]
+    fn test_draw_text_null_hdc_is_false() {
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 10,
+        };
+        let text: Vec<u16> = "x".encode_utf16().collect();
+        assert!(!draw_text(
+            HDC::default(),
+            &text,
+            &rc,
+            DRAW_TEXT_FORMAT(0),
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_draw_text_on_offscreen() {
+        use windows::Win32::Graphics::Gdi::{DT_CENTER, DT_LEFT, DT_SINGLELINE};
+        let off = make_offscreen(64, 24);
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: 64,
+            bottom: 24,
+        };
+        let text: Vec<u16> = "Hello".encode_utf16().collect();
+        // フォント・色なし。
+        assert!(draw_text(
+            off.dc(),
+            &text,
+            &rc,
+            DT_LEFT | DT_SINGLELINE,
+            None,
+            None
+        ));
+        // 色指定。
+        assert!(draw_text(off.dc(), &text, &rc, DT_LEFT, None, Some(0x0000_00FF)));
+        // フォント指定。
+        let font = Font::from_font_type(FontType::Message);
+        assert!(draw_text(
+            off.dc(),
+            &text,
+            &rc,
+            DT_CENTER,
+            Some(&font),
+            Some(0x0000_FF00)
+        ));
+        // 空文字でも true。
+        assert!(draw_text(off.dc(), &[], &rc, DT_LEFT, None, None));
+    }
+
+    // ----- MonoColorBitmap -----
+
+    /// DIB の生バイトを読み取る(テスト検証用)。
+    unsafe fn dib_bits(hbm: HBITMAP, len: usize) -> Vec<u8> {
+        let mut ds = DIBSECTION::default();
+        let got = GetObjectW(
+            HGDIOBJ(hbm.0),
+            size_of::<DIBSECTION>() as i32,
+            Some(&mut ds as *mut DIBSECTION as *mut c_void),
+        );
+        assert_eq!(got, size_of::<DIBSECTION>() as i32);
+        let mut v = vec![0u8; len];
+        copy_nonoverlapping(ds.dsBm.bmBits as *const u8, v.as_mut_ptr(), len);
+        v
+    }
+
+    /// 32bpp の DIB ソースを作り、先頭から `bytes` を書き込む。
+    unsafe fn make_src_32(w: i32, h: i32, bytes: &[u8]) -> HBITMAP {
+        let (hbm, bits) = create_dib_with_bits(w, h, 32).unwrap();
+        copy_nonoverlapping(bytes.as_ptr(), bits as *mut u8, bytes.len());
+        hbm
+    }
+
+    /// 24bpp の DIB ソースを作り、先頭から `bytes` を書き込む。
+    unsafe fn make_src_24(w: i32, h: i32, bytes: &[u8]) -> HBITMAP {
+        let (hbm, bits) = create_dib_with_bits(w, h, 24).unwrap();
+        copy_nonoverlapping(bytes.as_ptr(), bits as *mut u8, bytes.len());
+        hbm
+    }
+
+    #[test]
+    fn test_monocolor_create_null_false() {
+        let mut m = MonoColorBitmap::new();
+        assert!(!m.create(HBITMAP::default()));
+        assert!(!m.is_created());
+    }
+
+    #[test]
+    fn test_monocolor_color_image_extract_copies() {
+        unsafe {
+            // 2x1 の 32bpp。BGRA を各画素に格納。
+            let src_bytes = [10u8, 20, 30, 40, 50, 60, 70, 80];
+            let src = make_src_32(2, 1, &src_bytes);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(src));
+            let _ = DeleteObject(HGDIOBJ(src.0));
+            assert!(m.is_created());
+            // color_image なので色は無視され、そのままコピーされる。
+            let ex = m.extract_bitmap(0, 0, 2, 1, 0x0000_00FF).unwrap();
+            assert_eq!(dib_bits(ex, 8), src_bytes);
+            let _ = DeleteObject(HGDIOBJ(ex.0));
+        }
+    }
+
+    #[test]
+    fn test_monocolor_mono_image_extract_colorizes() {
+        unsafe {
+            // 24bpp, 2x1。各画素の先頭バイト(=アルファとして扱われる)。
+            let mut src = [0u8; 8];
+            src[0] = 100; // 画素0 のアルファ
+            src[3] = 200; // 画素1 のアルファ
+            let hbm_src = make_src_24(2, 1, &src);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(hbm_src));
+            let _ = DeleteObject(HGDIOBJ(hbm_src.0));
+            // R=0x11, G=0x22, B=0x33。
+            let color = 0x0033_2211u32;
+            let ex = m.extract_bitmap(0, 0, 2, 1, color).unwrap();
+            assert_eq!(
+                dib_bits(ex, 8),
+                [0x33, 0x22, 0x11, 100, 0x33, 0x22, 0x11, 200]
+            );
+            let _ = DeleteObject(HGDIOBJ(ex.0));
+        }
+    }
+
+    #[test]
+    fn test_monocolor_extract_out_of_range() {
+        unsafe {
+            let src = [0u8; 8];
+            let hbm = make_src_32(2, 1, &src);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(hbm));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            assert!(m.extract_bitmap(-1, 0, 1, 1, 0).is_none());
+            assert!(m.extract_bitmap(0, 0, 3, 1, 0).is_none());
+            assert!(m.extract_bitmap(0, 0, 2, 2, 0).is_none());
+        }
+    }
+
+    #[test]
+    fn test_monocolor_draw_smoke() {
+        unsafe {
+            let src = [0u8; 8];
+            let hbm = make_src_32(2, 1, &src);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(hbm));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            let off = make_offscreen(8, 8);
+            // 全体描画(サイズ自動)。
+            assert!(m.draw(off.dc(), 0, 0, 0, 0, 0, 0, 0, 0, 0x0000_00FF, 255));
+            assert!(m.draw_at(off.dc(), 1, 1, 0x0000_00FF, 128, 0, 0, 2, 1));
+            // ソース範囲外は false。
+            assert!(!m.draw(off.dc(), 0, 0, 2, 1, 0, 0, 5, 1, 0, 255));
+        }
+    }
+
+    #[test]
+    fn test_monocolor_draw_not_created_false() {
+        let mut m = MonoColorBitmap::new();
+        let off = make_offscreen(4, 4);
+        assert!(!m.draw(off.dc(), 0, 0, 4, 4, 0, 0, 4, 4, 0, 255));
+    }
+
+    #[test]
+    fn test_monocolor_create_image_list() {
+        unsafe {
+            let src = [0u8; 8];
+            let hbm = make_src_32(2, 1, &src);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(hbm));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            let himl = m.create_image_list(2, 0x0000_00FF);
+            assert!(himl.is_some());
+            let _ = ImageList_Destroy(Some(himl.unwrap()));
+            // icon_width < 1 は None。
+            assert!(m.create_image_list(0, 0).is_none());
+        }
+    }
+
+    #[test]
+    fn test_monocolor_extract_icon() {
+        use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+        unsafe {
+            let src = [0u8; 8];
+            let hbm = make_src_32(2, 1, &src);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(hbm));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            let icon = m.extract_icon_full(0x0000_00FF);
+            assert!(icon.is_some());
+            let _ = DestroyIcon(icon.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_monocolor_clone() {
+        unsafe {
+            let mut src = [0u8; 8];
+            src[0] = 128;
+            src[3] = 64;
+            let hbm = make_src_24(2, 1, &src);
+            let mut m = MonoColorBitmap::new();
+            assert!(m.create(hbm));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            let c = m.clone();
+            assert!(c.is_created());
+            // クローンから抽出しても元と同じ結果になる。
+            let color = 0x0033_2211u32;
+            let a = m.extract_bitmap(0, 0, 2, 1, color).unwrap();
+            let b = c.extract_bitmap(0, 0, 2, 1, color).unwrap();
+            assert_eq!(dib_bits(a, 8), dib_bits(b, 8));
+            let _ = DeleteObject(HGDIOBJ(a.0));
+            let _ = DeleteObject(HGDIOBJ(b.0));
+        }
+    }
+
+    // ----- MonoColorIconList -----
+
+    #[test]
+    fn test_iconlist_create_and_extract() {
+        unsafe {
+            // 4x1 の 32bpp。幅2のアイコン2個。
+            let src = [
+                1u8, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 21, 22, 23, 24,
+            ];
+            let hbm = make_src_32(4, 1, &src);
+            let mut list = MonoColorIconList::new();
+            assert!(list.create(hbm, 2, 1));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            assert!(list.is_created());
+            assert_eq!(list.icon_width(), 2);
+            assert_eq!(list.icon_height(), 1);
+            // index1(列2..4)を取り出す(color_image なのでそのままコピー)。
+            let ex = list.extract_bitmap(1, 0x0000_00FF).unwrap();
+            assert_eq!(dib_bits(ex, 8), [11, 12, 13, 14, 21, 22, 23, 24]);
+            let _ = DeleteObject(HGDIOBJ(ex.0));
+        }
+    }
+
+    #[test]
+    fn test_iconlist_draw_smoke() {
+        unsafe {
+            let src = [0u8; 16];
+            let hbm = make_src_32(4, 1, &src);
+            let mut list = MonoColorIconList::new();
+            assert!(list.create(hbm, 2, 1));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            let off = make_offscreen(8, 8);
+            assert!(list.draw(off.dc(), 0, 0, 2, 1, 0, 0x0000_00FF, 255));
+            // dst サイズ不正は false。
+            assert!(!list.draw(off.dc(), 0, 0, 0, 1, 0, 0, 255));
+            assert!(!list.draw(HDC::default(), 0, 0, 2, 1, 0, 0, 255));
+        }
+    }
+
+    #[test]
+    fn test_iconlist_create_resized_same_size() {
+        unsafe {
+            let src = [0u8; 16];
+            let hbm = make_src_32(4, 1, &src);
+            let mut list = MonoColorIconList::new();
+            assert!(list.create_resized(hbm, 2, 1, 2, 1));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            assert!(list.is_created());
+            assert_eq!(list.icon_width(), 2);
+        }
+    }
+
+    #[test]
+    fn test_iconlist_create_resized() {
+        unsafe {
+            // 4x2 24bpp(行ストライド12, 計24バイト)。orig 2x2 → 3x3。
+            let bytes = vec![0u8; 24];
+            let hbm = make_src_24(4, 2, &bytes);
+            let mut list = MonoColorIconList::new();
+            assert!(list.create_resized(hbm, 2, 2, 3, 3));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            assert!(list.is_created());
+            assert_eq!(list.icon_width(), 3);
+            assert_eq!(list.icon_height(), 3);
+        }
+    }
+
+    #[test]
+    fn test_iconlist_create_resized_invalid() {
+        unsafe {
+            let src = [0u8; 16];
+            let hbm = make_src_32(4, 1, &src);
+            let mut list = MonoColorIconList::new();
+            // orig 幅8 > 実幅4 は false。
+            assert!(!list.create_resized(hbm, 8, 1, 4, 1));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            assert!(!list.is_created());
+        }
     }
 }
