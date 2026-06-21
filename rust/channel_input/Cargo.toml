@@ -1,0 +1,13 @@
+# TVTest の CChannelInput(src/ChannelInput.cpp)を移植したクレート。
+# チャンネル番号のキー入力状態機械(数字キー/テンキー/ファンクションキーの蓄積・確定・取消)。
+# 仮想キーコードの整数値のみを用いるためプラットフォーム非依存。
+[package]
+name = "tvtest_channel_input"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CChannelInput (channel number key-input state machine)"
+
+[lib]
+name = "tvtest_channel_input"
+path = "src/lib.rs"
