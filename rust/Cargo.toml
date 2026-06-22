@@ -40,6 +40,7 @@ members = [
     "logo_manager",
     "channel_manager",
     "audio_manager",
+    "favorites",
     "epgdatatojson",
     "libisdb/libisdb_datetime",
     "libisdb/libisdb_crc", "libisdb/libisdb_md5", "libisdb/libisdb_bitrate", "libisdb/libisdb_bitstream", "libisdb/libisdb_ts_info", "libisdb/libisdb_utilities", "libisdb/libisdb_descriptor", "libisdb/libisdb_ts_packet", "libisdb/libisdb_psi_section", "libisdb/libisdb_pes_packet", "libisdb/libisdb_adts_parser", "libisdb/libisdb_mpeg2_video_parser", "libisdb/libisdb_h26x_parser", "libisdb/libisdb_pid_map", "libisdb/libisdb_psi_table", "libisdb/libisdb_ts_tables", "libisdb/libisdb_arib_string", "libisdb/libisdb_event_info", "libisdb/libisdb_epg_data_file",

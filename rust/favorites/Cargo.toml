@@ -1,0 +1,17 @@
+# TVTest の お気に入り(src/Favorites.cpp / Favorites.h)のモデル層を移植したクレート。
+# フォルダ/チャンネルの再帰的ツリー構造(CFavoriteFolder/CFavoriteChannel)、項目の
+# 追加/削除/移動/検索、列挙、コマンド ID からのチャンネル解決(CFavoritesManager)を扱う。
+# メニュー構築・整理ダイアログ・ファイル入出力(Win32/I-O)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_favorites"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's favorites tree model (folders/channels, enumeration, command lookup)"
+
+[lib]
+name = "tvtest_favorites"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_channel_list = { path = "../channel_list" }
