@@ -1,0 +1,14 @@
+# TVTest の CAudioManager(src/AudioManager.cpp / AudioManager.h)のモデル層を移植した
+# クレート。音声ストリーム ID の符号化/復号、PMT(コンポーネント)と EIT(イベント音声)の
+# 統合、既定音声の選択(言語優先)、デュアルモノの主/副/両展開、サービスごとの選択保持を
+# 扱う。CoreEngine/AnalyzerFilter からのデータ取得とロックは対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_audio_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CAudioManager model layer (audio stream id, PMT/EIT merge, default audio selection)"
+
+[lib]
+name = "tvtest_audio_manager"
+path = "src/lib.rs"
