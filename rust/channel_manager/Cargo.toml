@@ -1,0 +1,17 @@
+# TVTest の CChannelManager(src/ChannelManager.cpp / ChannelManager.h)の純粋ロジックを
+# 移植したクレート。チャンネル送り(リモコン番号順/インデックス順・無効スキップ・巡回)、
+# 現在位置の状態保持、CChannelSpec を扱う。チューニング空間リストの解決・ファイル読込・
+# BonDriver 連携は上位の統合層(Win32/I-O 依存)のため対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_channel_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CChannelManager pure logic (channel up/down navigation, current position)"
+
+[lib]
+name = "tvtest_channel_manager"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_channel_list = { path = "../channel_list" }
