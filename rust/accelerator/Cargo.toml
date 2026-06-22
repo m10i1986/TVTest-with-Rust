@@ -1,0 +1,14 @@
+# TVTest の CAccelerator(src/Accelerator.cpp / Accelerator.h)の純粋ロジックを移植した
+# クレート。キー名テーブル・アクセラレータ表示文字列の整形・項目パラメータの符号化/
+# 復号・ホットキー/アプリコマンドの照合を扱う。HACCEL 生成・設定ダイアログ・ListView・
+# 既定キー割当テーブル(リソース ID 依存)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_accelerator"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CAccelerator pure logic (key-name table, accel text formatting, hotkey lookup)"
+
+[lib]
+name = "tvtest_accelerator"
+path = "src/lib.rs"
