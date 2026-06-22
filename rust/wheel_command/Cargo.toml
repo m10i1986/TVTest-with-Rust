@@ -1,0 +1,14 @@
+# TVTest の CWheelCommandManager(src/WheelCommand.cpp / WheelCommand.h)を移植したクレート。
+# マウスホイール割り当て可能コマンドの固定テーブル(ID/識別子テキスト)と、
+# ID⇔識別子テキストの相互変換を扱う。リソース文字列取得(LoadString)は対象外で
+# プラットフォーム非依存。
+[package]
+name = "tvtest_wheel_command"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CWheelCommandManager (wheel command table and name parsing)"
+
+[lib]
+name = "tvtest_wheel_command"
+path = "src/lib.rs"
