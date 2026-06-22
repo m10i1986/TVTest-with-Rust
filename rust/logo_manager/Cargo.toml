@@ -1,0 +1,15 @@
+# TVTest の CLogoManager(src/LogoManager.cpp / LogoManager.h)のモデル層を移植した
+# クレート。局ロゴの ID/タイプによるインデックス管理、ロゴバージョン比較(12bit ラップ
+# アラウンド考慮)、SMALL/BIG の優先順位選択、利用可能タイプの算出を扱う。
+# bitmap 化・画像コーデック・ファイル入出力・ロック・LibISDB フィルタ連携は対象外で
+# プラットフォーム非依存。
+[package]
+name = "tvtest_logo_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CLogoManager model layer (logo index, version compare, type priority)"
+
+[lib]
+name = "tvtest_logo_manager"
+path = "src/lib.rs"
