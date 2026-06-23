@@ -1,0 +1,17 @@
+# TVTest のタイトルバー(src/TitleBar.cpp / TitleBar.h)の固定レイアウト幾何を
+# 移植したクレート。左のラベル領域と右端に並ぶ 4 つのウィンドウボタン(最小化/最大化/
+# 全画面/閉じる)の矩形計算・高さ算出・ヒットテスト・アイコン領域判定を扱う。
+# 描画・テーマ・フォント計測・ツールチップ・ウィンドウ管理(Win32)は対象外で
+# プラットフォーム非依存。クライアント矩形・枠幅・フォント高さはデータとして注入する。
+[package]
+name = "tvtest_title_bar"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's title bar fixed layout geometry (label + window buttons)"
+
+[lib]
+name = "tvtest_title_bar"
+path = "src/lib.rs"
+
+[dependencies]
