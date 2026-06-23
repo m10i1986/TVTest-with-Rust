@@ -1,0 +1,16 @@
+# TVTest の通知バー(src/NotificationBar.cpp / .h)の純粋部分を移植したクレート。
+# 通知メッセージのキュー管理(表示中のスキップ可能メッセージの差し替え、満了による前進)、
+# バー高さの算出、表示/フェードアニメーションのバー位置計算を扱う。
+# ウィンドウ生成・描画・タイマー・テーマ/フォント実体(Win32)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_notification_bar"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's notification bar message queue and layout logic"
+
+[lib]
+name = "tvtest_notification_bar"
+path = "src/lib.rs"
+
+[dependencies]
