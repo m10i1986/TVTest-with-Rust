@@ -1,0 +1,16 @@
+# TVTest のログ機能(src/Logger.cpp / Logger.h)のモデル層を移植したクレート。
+# ログ項目(CLogItem: 種別/本文/通し番号/時刻)と、その蓄積・通し番号による
+# 索引(CLogger)を扱う。ロケール依存の整形(Format/FormatTime)・ファイル入出力・
+# ダイアログ・クリップボード・設定入出力(Win32/I-O)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_logger"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's logger model (log items, accumulation, serial-number lookup)"
+
+[lib]
+name = "tvtest_logger"
+path = "src/lib.rs"
+
+[dependencies]
