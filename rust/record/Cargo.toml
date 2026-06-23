@@ -1,0 +1,19 @@
+# TVTest の録画(src/Record.cpp / Record.h)のモデル層を移植したクレート。
+# 録画設定のストリーム保存フラグ(CRecordingSettings)、録画時刻(CRecordTime)、
+# 録画予約/停止の時刻判定(CRecordManager の QueryStart/QueryStop/GetRemainTime 等)を扱う。
+# 「現在時刻」は引数注入で純粋化する。録画エンジン(LibISDB::RecorderFilter/TSEngine)・
+# ファイル入出力・ダイアログ・設定入出力(Win32/I-O)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_record"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's recording model (settings flags, reservation/stop time queries)"
+
+[lib]
+name = "tvtest_record"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_util = { path = "../util" }
+libisdb_stream_selector = { path = "../libisdb/libisdb_stream_selector" }
