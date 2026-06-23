@@ -1,0 +1,18 @@
+# TVTest の表示設定(src/ViewOptions.cpp / ViewOptions.h)の純粋部分を移植したクレート。
+# パン&スキャン時のウィンドウ調整モード(AdjustWindowMode)と旧設定との互換変換、
+# タイトル文字列書式のプリセット、旧仕様のタイトル書式を現行へ変換する
+# TitleFormatMakeCompatible を扱う。ダイアログ(DlgProc)・CSettings I/O 本体・
+# フォント選択・ロゴ表示などの Win32 依存は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_view_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's view options pure logic: adjust-window-mode, title format presets/compat"
+
+[lib]
+name = "tvtest_view_options"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_string_utility = { path = "../string_utility" }
