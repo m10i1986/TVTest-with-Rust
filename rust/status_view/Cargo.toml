@@ -1,0 +1,18 @@
+# TVTest のステータスバー(src/StatusView.cpp / StatusView.h)の項目レイアウト
+# アルゴリズムを移植したクレート。項目の行折り返し(CalcRows/CalcLayout)、
+# フル行項目・可変幅項目の展開、改行フラグ・実幅の算出、ID 索引・全幅集計を扱う。
+# 項目の幅/可視/スタイルをデータとして保持し、Win32 描画・テーマ/フォント計測・
+# ウィンドウ管理(CBasicWindow)・矩形のテーマ枠計算は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_status_view"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's status bar item layout (row wrapping, full/variable-width items)"
+
+[lib]
+name = "tvtest_status_view"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
