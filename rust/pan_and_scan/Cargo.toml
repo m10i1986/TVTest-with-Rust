@@ -1,0 +1,16 @@
+# TVTest のパン&スキャン設定(src/PanAndScanOptions.cpp / .h)の純粋部分を移植したクレート。
+# パン&スキャン情報(表示位置/サイズの百分率・アスペクト比)の文字列⇄構造体変換と検証、
+# 値の百分率フォーマット/パース、既定プリセット(シネスコ/ビスタ等)とプリセットリスト管理を扱う。
+# 設定入出力・ダイアログ・インポート/エクスポート(Win32/I-O)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_pan_and_scan"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's pan & scan info parse/format and preset list"
+
+[lib]
+name = "tvtest_pan_and_scan"
+path = "src/lib.rs"
+
+[dependencies]
