@@ -461,7 +461,10 @@ mod tests {
     fn sub_menu_pos_only_for_submenu_ids() {
         // サブメニューコマンド → 位置(ID < 100)。
         assert_eq!(sub_menu_pos_by_command(CM_ZOOMMENU), SUBMENU_ZOOM);
-        assert_eq!(sub_menu_pos_by_command(CM_FILTERPROPERTYMENU), SUBMENU_FILTERPROPERTY);
+        assert_eq!(
+            sub_menu_pos_by_command(CM_FILTERPROPERTYMENU),
+            SUBMENU_FILTERPROPERTY
+        );
         // 通常コマンド(ID >= 100)→ -1。
         assert_eq!(sub_menu_pos_by_command(CM_FULLSCREEN), -1);
         // 未登録 → -1。
@@ -524,7 +527,7 @@ mod tests {
             ("FullScreen".to_string(), Some(ITEM_STATE_VISIBLE)),
             ("ZoomMenu".to_string(), None), // 状態欠如 → 既定で表示
             ("Bad".to_string(), Some(ITEM_STATE_VISIBLE)), // 解決不可 → INVALID で除外
-            ("".to_string(), Some(0)), // 空=区切り だが非表示
+            ("".to_string(), Some(0)),      // 空=区切り だが非表示
         ]);
         // ロード直後は全 ID 未解決。
         assert!(opt.menu_item_list().iter().all(|i| i.id == MENU_ID_INVALID));
@@ -554,8 +557,10 @@ mod tests {
         assert!(opt.is_default_for_write());
 
         // 既定そのまま(全表示)→ 保存不要。
-        let default_items: Vec<(i32, bool)> =
-            DEFAULT_MENU_ITEM_LIST.iter().map(|e| (e.id, true)).collect();
+        let default_items: Vec<(i32, bool)> = DEFAULT_MENU_ITEM_LIST
+            .iter()
+            .map(|e| (e.id, true))
+            .collect();
         opt.set_from_dialog(&default_items);
         assert!(opt.is_default_for_write());
 
@@ -587,12 +592,30 @@ mod tests {
         let mut opt = MenuOptions::new();
         // 名前のみ(未解決)・区切り・通常項目。
         opt.menu_item_list = vec![
-            MenuItemInfo { name: "Unresolved".to_string(), id: MENU_ID_INVALID, visible: true },
-            MenuItemInfo { name: String::new(), id: MENU_ID_SEPARATOR, visible: true },
-            MenuItemInfo { name: String::new(), id: SUBMENU_ZOOM, visible: false },
+            MenuItemInfo {
+                name: "Unresolved".to_string(),
+                id: MENU_ID_INVALID,
+                visible: true,
+            },
+            MenuItemInfo {
+                name: String::new(),
+                id: MENU_ID_SEPARATOR,
+                visible: true,
+            },
+            MenuItemInfo {
+                name: String::new(),
+                id: SUBMENU_ZOOM,
+                visible: false,
+            },
         ];
         let serialized = opt.serialize_items();
-        assert_eq!(serialized[0], (MenuWriteId::Name("Unresolved".to_string()), ITEM_STATE_VISIBLE));
+        assert_eq!(
+            serialized[0],
+            (
+                MenuWriteId::Name("Unresolved".to_string()),
+                ITEM_STATE_VISIBLE
+            )
+        );
         assert_eq!(serialized[1], (MenuWriteId::Separator, ITEM_STATE_VISIBLE));
         // SUBMENU_ZOOM(0) → コマンド CM_ZOOMMENU(300)、非表示で状態 0。
         assert_eq!(serialized[2], (MenuWriteId::Command(CM_ZOOMMENU), 0));
@@ -621,7 +644,10 @@ mod tests {
         assert!(opt.menu_item_list()[1..].iter().all(|i| !i.visible));
         // 区切り(-1)はちょうど 1 件。
         assert_eq!(
-            opt.menu_item_list().iter().filter(|i| i.id == MENU_ID_SEPARATOR).count(),
+            opt.menu_item_list()
+                .iter()
+                .filter(|i| i.id == MENU_ID_SEPARATOR)
+                .count(),
             1
         );
     }
@@ -637,8 +663,14 @@ mod tests {
         // 既定 29 + プラグイン 3 = 32。
         assert_eq!(opt.menu_item_list().len(), 32);
         assert!(opt.menu_item_list().iter().any(|i| i.id == CM_PLUGIN_FIRST));
-        assert!(opt.menu_item_list().iter().any(|i| i.id == CM_PLUGIN_FIRST + 2));
-        assert!(!opt.menu_item_list().iter().any(|i| i.id == CM_PLUGIN_FIRST + 3));
+        assert!(opt
+            .menu_item_list()
+            .iter()
+            .any(|i| i.id == CM_PLUGIN_FIRST + 2));
+        assert!(!opt
+            .menu_item_list()
+            .iter()
+            .any(|i| i.id == CM_PLUGIN_FIRST + 3));
     }
 
     #[test]

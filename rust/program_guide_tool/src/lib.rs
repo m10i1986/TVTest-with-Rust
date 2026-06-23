@@ -353,11 +353,20 @@ mod tests {
         };
         assert_eq!(format_epg_keyword("eid", &values).as_deref(), Some("1234"));
         assert_eq!(format_epg_keyword("NID", &values).as_deref(), Some("32736")); // 大小無視
-        assert_eq!(format_epg_keyword("tsid", &values).as_deref(), Some("16625"));
+        assert_eq!(
+            format_epg_keyword("tsid", &values).as_deref(),
+            Some("16625")
+        );
         assert_eq!(format_epg_keyword("sid", &values).as_deref(), Some("1024"));
-        assert_eq!(format_epg_keyword("duration-sec", &values).as_deref(), Some("1830"));
-        assert_eq!(format_epg_keyword("Duration-Min", &values).as_deref(), Some("31")); // 切り上げ
-        // tvpid と未知はフォールバック。
+        assert_eq!(
+            format_epg_keyword("duration-sec", &values).as_deref(),
+            Some("1830")
+        );
+        assert_eq!(
+            format_epg_keyword("Duration-Min", &values).as_deref(),
+            Some("31")
+        ); // 切り上げ
+           // tvpid と未知はフォールバック。
         assert_eq!(format_epg_keyword("tvpid", &values), None);
         assert_eq!(format_epg_keyword("unknown", &values), None);
     }

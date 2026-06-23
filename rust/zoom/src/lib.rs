@@ -163,26 +163,159 @@ const fn zc(
 /// `ZoomOptions` の `zoom_list`/`order` のインデックスになる。
 pub static DEFAULT_ZOOM_LIST: [ZoomCommandInfo; NUM_ZOOM_COMMANDS] = [
     zc(CM_ZOOM_FIRST, 1, 5, BASE_WIDTH / 5, BASE_HEIGHT / 5, true), // CM_ZOOM_20
-    zc(CM_ZOOM_FIRST + 1, 1, 4, BASE_WIDTH / 4, BASE_HEIGHT / 4, true), // CM_ZOOM_25
-    zc(CM_ZOOM_FIRST + 2, 1, 3, BASE_WIDTH / 3, BASE_HEIGHT / 3, true), // CM_ZOOM_33
-    zc(CM_ZOOM_FIRST + 3, 1, 2, BASE_WIDTH / 2, BASE_HEIGHT / 2, true), // CM_ZOOM_50
-    zc(CM_ZOOM_FIRST + 4, 2, 3, BASE_WIDTH * 2 / 3, BASE_HEIGHT * 2 / 3, true), // CM_ZOOM_66
-    zc(CM_ZOOM_FIRST + 5, 3, 4, BASE_WIDTH * 3 / 4, BASE_HEIGHT * 3 / 4, true), // CM_ZOOM_75
+    zc(
+        CM_ZOOM_FIRST + 1,
+        1,
+        4,
+        BASE_WIDTH / 4,
+        BASE_HEIGHT / 4,
+        true,
+    ), // CM_ZOOM_25
+    zc(
+        CM_ZOOM_FIRST + 2,
+        1,
+        3,
+        BASE_WIDTH / 3,
+        BASE_HEIGHT / 3,
+        true,
+    ), // CM_ZOOM_33
+    zc(
+        CM_ZOOM_FIRST + 3,
+        1,
+        2,
+        BASE_WIDTH / 2,
+        BASE_HEIGHT / 2,
+        true,
+    ), // CM_ZOOM_50
+    zc(
+        CM_ZOOM_FIRST + 4,
+        2,
+        3,
+        BASE_WIDTH * 2 / 3,
+        BASE_HEIGHT * 2 / 3,
+        true,
+    ), // CM_ZOOM_66
+    zc(
+        CM_ZOOM_FIRST + 5,
+        3,
+        4,
+        BASE_WIDTH * 3 / 4,
+        BASE_HEIGHT * 3 / 4,
+        true,
+    ), // CM_ZOOM_75
     zc(CM_ZOOM_FIRST + 6, 1, 1, BASE_WIDTH, BASE_HEIGHT, true),     // CM_ZOOM_100
-    zc(CM_ZOOM_FIRST + 7, 3, 2, BASE_WIDTH * 3 / 2, BASE_HEIGHT * 3 / 2, true), // CM_ZOOM_150
-    zc(CM_ZOOM_FIRST + 8, 2, 1, BASE_WIDTH * 2, BASE_HEIGHT * 2, true), // CM_ZOOM_200
-    zc(CM_ZOOM_FIRST + 9, 5, 2, BASE_WIDTH * 5 / 2, BASE_HEIGHT * 5 / 2, false), // CM_ZOOM_250
-    zc(CM_ZOOM_FIRST + 10, 3, 1, BASE_WIDTH * 3, BASE_HEIGHT * 3, false), // CM_ZOOM_300
-    zc(CM_CUSTOMZOOM_FIRST, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 1, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 2, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 3, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 4, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 5, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 6, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 7, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 8, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
-    zc(CM_CUSTOMZOOM_FIRST + 9, 100, 100, BASE_WIDTH, BASE_HEIGHT, false),
+    zc(
+        CM_ZOOM_FIRST + 7,
+        3,
+        2,
+        BASE_WIDTH * 3 / 2,
+        BASE_HEIGHT * 3 / 2,
+        true,
+    ), // CM_ZOOM_150
+    zc(
+        CM_ZOOM_FIRST + 8,
+        2,
+        1,
+        BASE_WIDTH * 2,
+        BASE_HEIGHT * 2,
+        true,
+    ), // CM_ZOOM_200
+    zc(
+        CM_ZOOM_FIRST + 9,
+        5,
+        2,
+        BASE_WIDTH * 5 / 2,
+        BASE_HEIGHT * 5 / 2,
+        false,
+    ), // CM_ZOOM_250
+    zc(
+        CM_ZOOM_FIRST + 10,
+        3,
+        1,
+        BASE_WIDTH * 3,
+        BASE_HEIGHT * 3,
+        false,
+    ), // CM_ZOOM_300
+    zc(
+        CM_CUSTOMZOOM_FIRST,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 1,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 2,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 3,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 4,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 5,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 6,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 7,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 8,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
+    zc(
+        CM_CUSTOMZOOM_FIRST + 9,
+        100,
+        100,
+        BASE_WIDTH,
+        BASE_HEIGHT,
+        false,
+    ),
 ];
 
 /// コマンド ID がカスタムズーム(`CM_CUSTOMZOOM_FIRST`〜`CM_CUSTOMZOOM_LAST`)か。
@@ -249,9 +382,7 @@ impl ZoomOptions {
 
     /// コマンド ID からインデックスを解決(ZoomOptions.cpp:263-270 の `GetIndexByCommand`)。
     pub fn get_index_by_command(&self, command: i32) -> Option<usize> {
-        DEFAULT_ZOOM_LIST
-            .iter()
-            .position(|e| e.command == command)
+        DEFAULT_ZOOM_LIST.iter().position(|e| e.command == command)
     }
 
     /// 全ズーム設定(インデックス順)。
@@ -445,9 +576,8 @@ impl ZoomOptions {
             let checked = match info.zoom_type {
                 ZoomType::Rate => {
                     if !rate_checked
-                        && cur_zoom.is_some_and(|c| {
-                            c.rate.get_percentage() == info.rate.get_percentage()
-                        })
+                        && cur_zoom
+                            .is_some_and(|c| c.rate.get_percentage() == info.rate.get_percentage())
                     {
                         rate_checked = true;
                         true
@@ -527,17 +657,43 @@ mod tests {
         assert_eq!(i100, 6);
         let info = &opt.zoom_list()[i100];
         assert_eq!(info.rate, ZoomRate { rate: 1, factor: 1 });
-        assert_eq!(info.size, ZoomSize { width: 1920, height: 1080 });
+        assert_eq!(
+            info.size,
+            ZoomSize {
+                width: 1920,
+                height: 1080
+            }
+        );
         assert!(info.visible);
         // CM_ZOOM_33 のサイズは 1920/3 = 640。
         let i33 = opt.get_index_by_command(CM_ZOOM_FIRST + 2).unwrap();
-        assert_eq!(opt.zoom_list()[i33].size, ZoomSize { width: 640, height: 360 });
+        assert_eq!(
+            opt.zoom_list()[i33].size,
+            ZoomSize {
+                width: 640,
+                height: 360
+            }
+        );
         // 250% / 300% は既定非表示。
-        assert!(!opt.get_zoom_info_by_command(CM_ZOOM_FIRST + 9).unwrap().visible);
-        assert!(!opt.get_zoom_info_by_command(CM_ZOOM_FIRST + 10).unwrap().visible);
+        assert!(
+            !opt.get_zoom_info_by_command(CM_ZOOM_FIRST + 9)
+                .unwrap()
+                .visible
+        );
+        assert!(
+            !opt.get_zoom_info_by_command(CM_ZOOM_FIRST + 10)
+                .unwrap()
+                .visible
+        );
         // カスタムは 100/100・基準サイズ・非表示。
         let cust = opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST).unwrap();
-        assert_eq!(cust.rate, ZoomRate { rate: 100, factor: 100 });
+        assert_eq!(
+            cust.rate,
+            ZoomRate {
+                rate: 100,
+                factor: 100
+            }
+        );
         assert!(!cust.visible);
     }
 
@@ -566,7 +722,10 @@ mod tests {
         let rate_frac = ZoomInfo {
             zoom_type: ZoomType::Rate,
             rate: ZoomRate { rate: 1, factor: 3 },
-            size: ZoomSize { width: 640, height: 360 },
+            size: ZoomSize {
+                width: 640,
+                height: 360,
+            },
             visible: true,
         };
         assert_eq!(format_menu_text(&rate_frac), "33% (1/3)");
@@ -574,7 +733,10 @@ mod tests {
         let rate_half = ZoomInfo {
             zoom_type: ZoomType::Rate,
             rate: ZoomRate { rate: 1, factor: 2 },
-            size: ZoomSize { width: 960, height: 540 },
+            size: ZoomSize {
+                width: 960,
+                height: 540,
+            },
             visible: true,
         };
         assert_eq!(format_menu_text(&rate_half), "50%");
@@ -591,8 +753,14 @@ mod tests {
         let opt = ZoomOptions::new();
         let rate = ZoomInfo {
             zoom_type: ZoomType::Rate,
-            rate: ZoomRate { rate: 100, factor: 100 },
-            size: ZoomSize { width: 1920, height: 1080 },
+            rate: ZoomRate {
+                rate: 100,
+                factor: 100,
+            },
+            size: ZoomSize {
+                width: 1920,
+                height: 1080,
+            },
             visible: false,
         };
         assert_eq!(
@@ -618,7 +786,10 @@ mod tests {
         let cur = ZoomInfo {
             zoom_type: ZoomType::Rate,
             rate: ZoomRate { rate: 1, factor: 1 }, // 100%
-            size: ZoomSize { width: 1920, height: 1080 },
+            size: ZoomSize {
+                width: 1920,
+                height: 1080,
+            },
             visible: true,
         };
         let menu = opt.build_menu(Some(&cur));
@@ -627,7 +798,11 @@ mod tests {
         assert_eq!(menu[0].command, CM_ZOOM_FIRST);
         assert_eq!(menu[0].text, "20%");
         // 100% の項目だけがチェックされる。
-        let checked: Vec<i32> = menu.iter().filter(|m| m.checked).map(|m| m.command).collect();
+        let checked: Vec<i32> = menu
+            .iter()
+            .filter(|m| m.checked)
+            .map(|m| m.command)
+            .collect();
         assert_eq!(checked, vec![CM_ZOOM_FIRST + 6]);
     }
 
@@ -647,13 +822,19 @@ mod tests {
         let cur = ZoomInfo {
             zoom_type: ZoomType::Size,
             rate: ZoomRate { rate: 1, factor: 1 },
-            size: ZoomSize { width: 1920, height: 1080 },
+            size: ZoomSize {
+                width: 1920,
+                height: 1080,
+            },
             visible: true,
         };
         let menu = opt.build_menu(Some(&cur));
         // Size 一致でカスタム項目がチェックされる(Rate 項目は cur が Size なので率不一致では無いが
         // GetPercentage は 100、cur.rate も 100 のため Rate 側も一致しチェックされる)。
-        let custom_item = menu.iter().find(|m| m.command == CM_CUSTOMZOOM_FIRST).unwrap();
+        let custom_item = menu
+            .iter()
+            .find(|m| m.command == CM_CUSTOMZOOM_FIRST)
+            .unwrap();
         assert!(custom_item.checked);
     }
 
@@ -663,14 +844,25 @@ mod tests {
         assert!(!opt.set_custom_rate(0, 0)); // rate <= 0
         assert!(!opt.set_custom_rate(0, MAX_RATE + 1)); // rate > MAX_RATE
         assert!(opt.set_custom_rate(0, 500));
-        assert_eq!(opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST).unwrap().rate.rate, 500);
+        assert_eq!(
+            opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST)
+                .unwrap()
+                .rate
+                .rate,
+            500
+        );
         assert!(!opt.set_custom_width(0, 0));
         assert!(opt.set_custom_width(0, 1280));
         assert!(!opt.set_custom_height(0, -1));
         assert!(opt.set_custom_height(0, 720));
         assert_eq!(
-            opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST).unwrap().size,
-            ZoomSize { width: 1280, height: 720 }
+            opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST)
+                .unwrap()
+                .size,
+            ZoomSize {
+                width: 1280,
+                height: 720
+            }
         );
         // カスタム範囲外インデックスは false。
         assert!(!opt.set_custom_rate(NUM_CUSTOM_ZOOM_COMMANDS, 100));
@@ -705,8 +897,8 @@ mod tests {
         let mut opt = ZoomOptions::new();
         opt.apply_zoom_list_order(&[
             (CM_ZOOM_FIRST + 6, true),
-            (0, true),                 // command 0 → 無視
-            (99999, true),             // 未知コマンド → 無視
+            (0, true),                  // command 0 → 無視
+            (99999, true),              // 未知コマンド → 無視
             (CM_ZOOM_FIRST + 6, false), // 重複 → 無視(visible 上書きされない)
         ]);
         assert_eq!(opt.order()[0], 6);
@@ -761,12 +953,21 @@ mod tests {
         let mut opt = ZoomOptions::new();
         let info = ZoomInfo {
             zoom_type: ZoomType::Size,
-            rate: ZoomRate { rate: 100, factor: 100 },
-            size: ZoomSize { width: 800, height: 450 },
+            rate: ZoomRate {
+                rate: 100,
+                factor: 100,
+            },
+            size: ZoomSize {
+                width: 800,
+                height: 450,
+            },
             visible: true,
         };
         assert!(opt.set_custom_zoom_info(2, info));
-        assert_eq!(opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST + 2), Some(&info));
+        assert_eq!(
+            opt.get_zoom_info_by_command(CM_CUSTOMZOOM_FIRST + 2),
+            Some(&info)
+        );
         assert!(!opt.set_custom_zoom_info(NUM_CUSTOM_ZOOM_COMMANDS, info));
     }
 }
