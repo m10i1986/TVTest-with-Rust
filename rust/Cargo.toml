@@ -19,6 +19,7 @@ members = [
     "variable_manager",
     "program_search",
     "event_searcher",
+    "featured_events",
     "regexp",
     "program_guide_favorites",
     "settings_util",

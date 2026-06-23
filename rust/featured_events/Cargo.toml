@@ -1,0 +1,18 @@
+[package]
+name = "tvtest_featured_events"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's FeaturedEvents pure logic: FeaturedEventsSettings data + FeaturedEventsMatcher (event matching against enabled search settings)"
+
+[lib]
+name = "tvtest_featured_events"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_event_searcher = { path = "../event_searcher" }
+tvtest_program_search = { path = "../program_search" }
+libisdb_event_info = { path = "../libisdb/libisdb_event_info" }
+
+[dev-dependencies]
+libisdb_datetime = { path = "../libisdb/libisdb_datetime" }
