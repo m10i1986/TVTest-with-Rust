@@ -1,0 +1,17 @@
+# TVTest のズーム設定(src/ZoomOptions.cpp / ZoomOptions.h)の純粋部分を移植した
+# クレート。ズーム率(分数→百分率)/ズームサイズのプリセットモデル、表示順序(m_Order)の
+# 設定・直列化、コマンド ID ↔ インデックス解決、メニュー項目テキストとチェック状態の算出、
+# カスタムズームの値検証を扱う。ダイアログ・メニュー生成・設定入出力・LoadString(Win32/I-O)
+# は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_zoom"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's zoom preset model, ordering, and menu/command text logic"
+
+[lib]
+name = "tvtest_zoom"
+path = "src/lib.rs"
+
+[dependencies]
