@@ -1,0 +1,17 @@
+# TVTest のサイドバー(src/SideBar.cpp / SideBar.h)の項目モデルとボタン幾何を
+# 移植したクレート。コマンドに対応する項目リスト(追加/区切り/有効・チェック状態)、
+# コマンド↔索引の変換、ラジオ選択、バー幅・各ボタンの矩形・ヒットテストを扱う。
+# アイコン描画・テーマ・ツールチップ・ウィンドウ管理(Win32)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_side_bar"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's side bar item model and button geometry"
+
+[lib]
+name = "tvtest_side_bar"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
