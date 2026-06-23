@@ -1,0 +1,17 @@
+# TVTest の OSD 設定(src/OSDOptions.cpp / OSDOptions.h)の純粋部分を移植したクレート。
+# OSD 種別フラグ、設定値「EnabledOSD / EnabledOSDMask」のマスクマージ(項目追加時の
+# 既定値反映)、OSD 有効判定、レイヤードウィンドウ判定、フェード時間の秒⇔ミリ秒変換、
+# チャンネル変更表示種別の列挙を扱う。ダイアログ(DlgProc)・CSettings I/O 本体・フォント
+# 選択(ChooseFont)・Aero/DWM 判定は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_osd_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's OSD options pure logic: enabled-OSD mask merge, OSD flags"
+
+[lib]
+name = "tvtest_osd_options"
+path = "src/lib.rs"
+
+[dependencies]

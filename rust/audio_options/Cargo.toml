@@ -1,0 +1,17 @@
+# TVTest の音声設定(src/AudioOptions.cpp / AudioOptions.h)の純粋部分を移植したクレート。
+# 音声言語優先順位(AudioLanguageInfo)のエンコード/デコードと設定文字列のパース・整形、
+# 言語コードテーブル、サラウンド/ダウンミックス行列の設定文字列パース・整形(FormatDouble 含む)、
+# 既定行列を扱う。ダイアログ(DlgProc)・DirectShow フィルタ・CSettings I/O・LibISDB の
+# GetLanguageText_ja は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_audio_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's audio options pure logic: language priority encoding, mixing matrix parse/format"
+
+[lib]
+name = "tvtest_audio_options"
+path = "src/lib.rs"
+
+[dependencies]
