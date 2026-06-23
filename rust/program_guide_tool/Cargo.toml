@@ -1,0 +1,17 @@
+# TVTest の番組表外部ツール(src/ProgramGuideTool.cpp / ProgramGuideTool.h)の純粋部分を
+# 移植したクレート。コマンド文字列からの実行ファイル名抽出(引用符/空白区切り・サロゲートペア
+# 対応のマルチバイト文字長)、ツール(名前+コマンド)モデルとツールリストの管理、EPG 変数の
+# パラメータ表・整数キーワードの文字列化を扱う。ダイアログ・アイコン取得・ShellExecute・
+# iEPG ファイル書き出し・VariableString 展開(Win32/I-O)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_program_guide_tool"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's program guide external tool model and command-line filename parsing"
+
+[lib]
+name = "tvtest_program_guide_tool"
+path = "src/lib.rs"
+
+[dependencies]
