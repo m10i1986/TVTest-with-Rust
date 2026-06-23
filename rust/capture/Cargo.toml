@@ -1,0 +1,17 @@
+# TVTest のキャプチャ設定(src/CaptureOptions.cpp / CaptureOptions.h)の純粋部分を
+# 移植したクレート。キャプチャサイズのプリセット(原寸/表示サイズ/百分率/カスタム)の
+# 整数インデックス↔状態の符号化、サイズ表・百分率表の参照、キャプチャ用変数(画像の幅/高さ)
+# の文字列化を扱う。設定入出力・画像コーデック・ダイアログ・ファイル生成(Win32/I-O)は
+# 対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_capture"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's capture size preset model and capture variables"
+
+[lib]
+name = "tvtest_capture"
+path = "src/lib.rs"
+
+[dependencies]
