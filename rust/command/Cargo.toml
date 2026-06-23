@@ -1,0 +1,14 @@
+# TVTest の CCommandManager(src/Command.cpp / Command.h)を移植したクレート。
+# コマンドの登録・ID/テキスト相互変換・状態フラグ管理・列挙(CCommandLister)を扱う。
+# ハンドラはコールバック、カスタマイザ/イベントリスナはトレイトで抽象化し、
+# Win32(LoadString によるリソース文字列フォールバック)に依存しないためポータブル。
+[package]
+name = "tvtest_command"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's CCommandManager (command registry, ID/text mapping, state flags)"
+
+[lib]
+name = "tvtest_command"
+path = "src/lib.rs"
