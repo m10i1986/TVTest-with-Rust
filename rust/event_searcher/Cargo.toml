@@ -1,0 +1,19 @@
+[package]
+name = "tvtest_event_searcher"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's ProgramSearch CEventSearcher: EPG event matching engine (keyword/genre/time/duration/CA/video filters)"
+
+[lib]
+name = "tvtest_event_searcher"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_program_search = { path = "../program_search" }
+tvtest_regexp = { path = "../regexp" }
+tvtest_epg_util = { path = "../epg_util" }
+libisdb_event_info = { path = "../libisdb/libisdb_event_info" }
+
+[dev-dependencies]
+libisdb_datetime = { path = "../libisdb/libisdb_datetime" }
