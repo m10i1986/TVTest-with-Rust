@@ -1,0 +1,18 @@
+# TVTest のメニュー設定(src/MenuOptions.cpp / MenuOptions.h)の純粋部分を移植した
+# クレート。メインメニュー項目(サブメニュー/コマンド/区切り)の既定テーブル、項目 ID ↔
+# コマンド ID の相互変換、サブメニュー位置解決、表示項目リストの抽出、設定の既定一致判定・
+# 直列化、ダイアログ初期化時の既定/追加項目マージを扱う。ダイアログ・ListView・LoadString・
+# CSettings I/O・CCommandManager(コマンドテキスト解決/有効判定)は対象外でプラットフォーム
+# 非依存(コマンドテキスト解決・有効判定はクロージャで注入)。
+[package]
+name = "tvtest_menu_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's main-menu item model: id/command mapping, ordering, and settings logic"
+
+[lib]
+name = "tvtest_menu_options"
+path = "src/lib.rs"
+
+[dependencies]
