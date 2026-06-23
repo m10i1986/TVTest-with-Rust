@@ -1,0 +1,19 @@
+# TVTest のドライバ管理(src/DriverManager.cpp / DriverManager.h)の純粋部分を移植した
+# クレート。チューナー仕様フラグ(network/file/virtual/volatile/no-enum-channel)の文字列
+# パース、チューナー名のワイルドカードマッチ(PathMatchSpec 基本相当)、パスユーティリティ
+# (PathFindFileName/PathFindExtension)、連番ドライバ(BonDriver*N.dll)の先頭判定、ファイル名
+# 検索を扱う。BonDriver ロード・ディレクトリ走査・CTuningSpaceList・CSettings I/O(Win32/I-O)は
+# 対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_driver_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's driver manager pure logic: tuner spec flags, wildcard match, path utilities"
+
+[lib]
+name = "tvtest_driver_manager"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
