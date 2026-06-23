@@ -1,0 +1,18 @@
+# TVTest のレイアウト(src/Layout.cpp / Layout.h)のスプリッタ幾何ロジックを移植したクレート。
+# 2 ペインのスプリッタ(CSplitter)のバー位置クランプ・ペイン矩形計算・最小サイズ集計・
+# スワップ・ペインサイズ指定を扱う。ペインの最小サイズ/可視状態/ID をデータとして保持し、
+# ウィンドウツリー(CContainer/CWindowContainer/CLayoutBase)・Win32 描画・DPI 取得・
+# マウスキャプチャ/カーソル設定(Win32)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_layout"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's layout splitter geometry (bar clamping, pane rects, min-size)"
+
+[lib]
+name = "tvtest_layout"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
