@@ -1,0 +1,29 @@
+# TVTest の Util.cpp / Util.h のうちアイコンサイズ/ロード/生成関連関数を windows-rs で
+# 移植したクレート。IconSizeType、GetStandardIconSize(GetSystemMetrics による標準アイコン
+# サイズ取得)、LoadIconStandardSize/LoadIconSpecificSize/LoadSystemIcon(LoadIconMetric/
+# LoadIconWithScaleDown を優先しつつ LoadImage/CopyImage にフォールバックするロード処理)、
+# CreateEmptyIcon(CreateBitmap/CreateDIBSection/CreateIconIndirect による空アイコン生成)、
+# CreateIconFromBitmap(ビットマップからのアイコン生成)、SaveIconFromBitmap
+# (24 ビット固定の ICO ファイル保存)を扱う。
+[package]
+name = "tvtest_icon_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's icon size/load/creation utilities (Util.cpp) using windows-rs"
+
+[lib]
+name = "tvtest_icon_util"
+path = "src/lib.rs"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+]
