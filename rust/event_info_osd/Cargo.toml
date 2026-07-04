@@ -1,0 +1,33 @@
+# TVTest の番組情報 OSD(src/EventInfoOSD.cpp / src/EventInfoOSD.h)の描画・レイアウト
+# 部分を移植したクレート。ColorScheme/EventInfoOSDStyle、AdjustPosition、本文テキスト
+# 合成(「内容」「概要」優先)、GDI+(tvtest_graphics)による Draw を扱う。
+# CPseudoOSD への配線(Show/Hide/SetPosition)は pseudo_osd クレート完成後に統合する。
+[package]
+name = "tvtest_event_info_osd"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's event info OSD drawing/layout (CEventInfoOSD)"
+
+[lib]
+name = "tvtest_event_info_osd"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_dpi_util = { path = "../dpi_util" }
+tvtest_epg_util = { path = "../epg_util" }
+tvtest_graphics = { path = "../graphics" }
+tvtest_style = { path = "../style" }
+tvtest_theme = { path = "../theme" }
+tvtest_util = { path = "../util" }
+libisdb_event_info = { path = "../libisdb/libisdb_event_info" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+]
+
+[target.'cfg(windows)'.dev-dependencies]
+libisdb_datetime = { path = "../libisdb/libisdb_datetime" }

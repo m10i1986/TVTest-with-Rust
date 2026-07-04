@@ -35,7 +35,7 @@ pub fn is_leap_year(year: i32) -> bool {
 
 /// 年内通算日(0-based)。DateTime.cpp:42。
 pub fn get_day_of_year(year: i32, month: i32, day: i32) -> Option<i32> {
-    if month < 1 || month > 12 {
+    if !(1..=12).contains(&month) {
         return None;
     }
     const MONTH_DAYS: [i32; 11] = [31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
@@ -262,9 +262,9 @@ pub fn bcd_time_to_second(bcd: &[u8]) -> u32 {
 
 /// BCD 時分(2バイト)を分数に変換。ARIBTime.cpp:158。
 pub fn bcd_time_hm_to_minute(bcd: u16) -> u16 {
-    (((bcd >> 12) * 10 + ((bcd >> 8) & 0x0F)) * 60
+    ((bcd >> 12) * 10 + ((bcd >> 8) & 0x0F)) * 60
         + ((bcd >> 4) & 0x0F) * 10
-        + (bcd & 0x0F)) as u16
+        + (bcd & 0x0F)
 }
 
 /// MJD を年/月/日/曜日に変換。ARIBTime.cpp:63。

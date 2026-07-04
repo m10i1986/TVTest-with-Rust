@@ -1,0 +1,32 @@
+# TVTest の疑似 OSD ウィンドウ(src/PseudoOSD.cpp / src/PseudoOSD.h)を windows-rs で
+# フル移植したクレート。CPseudoOSD(ウィンドウクラス登録/WndProc/レイヤードウィンドウ/
+# 表示タイマー/ワイプアニメーション/テキスト・画像描画)を扱う。
+# 本ワークスペース初の「WndProc を持つ実ウィンドウクラス」のクレート。
+[package]
+name = "tvtest_pseudo_osd"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's pseudo OSD window (CPseudoOSD) using windows-rs"
+
+[lib]
+name = "tvtest_pseudo_osd"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_window_util = { path = "../window_util" }
+tvtest_draw_util = { path = "../draw_util" }
+tvtest_graphics = { path = "../graphics" }
+tvtest_winutil = { path = "../winutil" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+]

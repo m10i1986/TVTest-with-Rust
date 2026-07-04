@@ -1,10 +1,18 @@
+# TVTest の EpgUtil(src/EpgUtil.cpp / src/EpgUtil.h)のプラットフォーム非依存な
+# 純粋ロジックを移植したクレート。映像種別判定・ジャンル抽出/テキスト・ARIB 外字変換に
+# 加え、FormatEventTime(番組時刻の文字列整形。時刻変換は入力側で済ませる前提)と
+# 曜日テキスト(Util.cpp GetDayOfWeekText)を提供する。
 [package]
 name = "tvtest_epg_util"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
-description = "Rust port of TVTest's EpgUtil pure logic (video type, genre, ARIB symbol map, genre text table)"
+description = "Rust port of TVTest's EpgUtil pure logic (video type, genre, ARIB symbol map, genre text table, event time formatting)"
 
 [lib]
 name = "tvtest_epg_util"
 path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
+tvtest_util = { path = "../util" }

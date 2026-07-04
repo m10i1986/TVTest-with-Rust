@@ -5,15 +5,28 @@
 //   - ContentNibble / get_event_genre : コンテンツニブルからジャンル抽出
 //   - map_arib_symbol              : ARIB 外字テーブルによる文字列変換(UTF-16)
 //   - EpgGenre::get_text           : ジャンルテキストテーブル引き(CEpgGenre::GetText)
+//   - FormatEventTimeFlag / MAX_EVENT_TIME_LENGTH / format_event_time
+//                                  : 番組時刻の文字列整形(EpgUtil.cpp:82 の
+//                                    SYSTEMTIME 版に相当する純粋部分)
+//   - get_day_of_week_text         : 曜日テキスト(Util.cpp:350 GetDayOfWeekText。
+//                                    format_event_time が参照するためここに置く)
+//
+// format_event_time の制限:
+//   原実装の EpgTimeToDisplayTime(GetAppClass().EpgOptions の時刻モード依存、
+//   EpgUtil.cpp:149)は移植不可のため、入力の開始時刻は「表示用時刻に変換済み」として
+//   扱う(= FormatEventTimeFlag::NO_CONVERT 相当の動作)。フラグ自体は API 忠実性の
+//   ため定義している。
 //
 // 非対象(AppMain / Win32 / LibISDB 依存):
-//   - FormatEventTime       : EpgTimeToDisplayTime(AppClass 依存)
 //   - EpgTimeToDisplayTime  : GetAppClass().EpgOptions 依存
 //   - CEpgIcons::DrawIcon   : GDI 依存
 //   - CEpgTheme::*          : Theme::CThemeManager / GDI 依存
 //
 // 文字列は原実装の wchar_t(UTF-16)に合わせ Vec<u16> / &[u16] ベースで扱う。
 // BMP 外文字(U+1Fxxx 等、ARIB 外字変換先)はサロゲートペア(2 u16)として扱う。
+// format_event_time の出力は BMP 内文字のみのため String で返す。
+
+use tvtest_util::{offset_system_time, SystemTime};
 
 /// 映像種別。原実装 EpgUtil.h EpgUtil::VideoType。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +258,122 @@ pub fn epg_genre_get_text(level1: i32, level2: i32) -> Option<&'static str> {
     None
 }
 
+bitflags::bitflags! {
+    /// 番組時刻整形のフラグ。原実装 EpgUtil.h:46 FormatEventTimeFlag。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct FormatEventTimeFlag: u32 {
+        /// 時を 2 桁ゼロ埋めで表記する(EpgUtil.h:48 Hour2Digits)。
+        const HOUR_2DIGITS = 0x0001;
+        /// 開始時刻のみ表記する(EpgUtil.h:49 StartOnly)。
+        const START_ONLY = 0x0002;
+        /// 日付を付ける(EpgUtil.h:50 Date)。
+        const DATE = 0x0004;
+        /// 日付に年も付ける(EpgUtil.h:51 Year。DATE と併用)。
+        const YEAR = 0x0008;
+        /// 終了時刻未定のとき「(終了未定)」を表記する(EpgUtil.h:52 UndecidedText)。
+        const UNDECIDED_TEXT = 0x0010;
+        /// 表示用時刻への変換を行わない(EpgUtil.h:53 NoConvert)。
+        ///
+        /// 本移植では EpgTimeToDisplayTime(AppClass 依存)を移植していないため、
+        /// 入力は本フラグの有無に関わらず常に表示用時刻として扱われる
+        /// (= 常に NoConvert 相当)。API 忠実性のため定義のみ残している。
+        const NO_CONVERT = 0x0020;
+    }
+}
+
+/// 番組時刻テキストの最大長。原実装 EpgUtil.h:57 MAX_EVENT_TIME_LENGTH。
+///
+/// 原実装はこの長さの TCHAR バッファへ書き込むが、本移植は String を返すため
+/// 切り詰めは行わない。定数は API 忠実性のため定義している。
+pub const MAX_EVENT_TIME_LENGTH: usize = 64;
+
+/// 曜日テキスト(0=日 〜 6=土)。原実装 Util.cpp:350 GetDayOfWeekText。
+///
+/// 範囲外は全角「？」(U+FF1F、Util.cpp:353)を返す。
+pub fn get_day_of_week_text(day_of_week: i32) -> &'static str {
+    const DAY_OF_WEEK_TEXT: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+    if !(0..=6).contains(&day_of_week) {
+        return "\u{FF1F}";
+    }
+    DAY_OF_WEEK_TEXT[day_of_week as usize]
+}
+
+/// 番組の開始〜終了時刻を文字列に整形する。
+/// 原実装 EpgUtil.cpp:82 FormatEventTime(const SYSTEMTIME &, DWORD, ...)。
+///
+/// `start_time` は表示用時刻に変換済みであること(モジュール冒頭 doc 参照。
+/// 原実装 EpgUtil.cpp:91-95 の EpgTimeToDisplayTime は行わない)。
+/// `duration` は秒。0 のとき終了時刻は表記されず、
+/// [`FormatEventTimeFlag::UNDECIDED_TEXT`] があれば「(終了未定)」になる
+/// (EpgUtil.cpp:126-137)。
+///
+/// 書式(EpgUtil.cpp:97-145):
+/// - 日付部(DATE): `月/日(曜) `、YEAR 併用で `年/` を前置。
+/// - 時刻部: HOUR_2DIGITS なら `{:02}:{:02}`、通常 `{}:{:02}`。
+/// - START_ONLY でなければ開始と終了を「～」(U+FF5E)で結ぶ
+///   (終了が空でも「～」は付く)。
+pub fn format_event_time(
+    start_time: &SystemTime,
+    duration: u32,
+    flags: FormatEventTimeFlag,
+) -> String {
+    // NoConvert 相当: 入力をそのまま表示用時刻として使う(EpgUtil.cpp:91-92)。
+    let start = *start_time;
+
+    // 日付部(EpgUtil.cpp:97-113)。
+    let mut date = String::new();
+    if flags.contains(FormatEventTimeFlag::DATE) {
+        if flags.contains(FormatEventTimeFlag::YEAR) {
+            date.push_str(&format!("{}/", start.year));
+        }
+        date.push_str(&format!(
+            "{}/{}({}) ",
+            start.month,
+            start.day,
+            get_day_of_week_text(start.day_of_week as i32)
+        ));
+    }
+
+    // 時刻書式(EpgUtil.cpp:115-116)。
+    let hour_2digits = flags.contains(FormatEventTimeFlag::HOUR_2DIGITS);
+    let format_time = |hour: u16, minute: u16| -> String {
+        if hour_2digits {
+            format!("{hour:02}:{minute:02}")
+        } else {
+            format!("{hour}:{minute:02}")
+        }
+    };
+
+    let start_text = format_time(start.hour, start.minute);
+
+    // 終了時刻(EpgUtil.cpp:125-138)。
+    let mut end_text = String::new();
+    if !flags.contains(FormatEventTimeFlag::START_ONLY) {
+        if duration > 0 {
+            // OffsetSystemTime(EndTime, Duration * SYSTEMTIME_SECOND)相当
+            // (EpgUtil.cpp:128-129。SYSTEMTIME_SECOND = 1000ms、Util.h:63)。
+            let mut end = start;
+            offset_system_time(&mut end, duration as i64 * 1000);
+            end_text = format_time(end.hour, end.minute);
+        } else if flags.contains(FormatEventTimeFlag::UNDECIDED_TEXT) {
+            end_text = "(終了未定)".to_string();
+        }
+    }
+
+    // 結合(EpgUtil.cpp:140-145)。StartOnly でなければ終了が空でも「～」が付く。
+    format!(
+        "{}{}{}{}",
+        date,
+        start_text,
+        if !flags.contains(FormatEventTimeFlag::START_ONLY) {
+            "\u{FF5E}"
+        } else {
+            ""
+        },
+        end_text
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +528,143 @@ mod tests {
         assert_eq!(epg_genre_get_text(0, 15), Some("その他"));
         // 範囲外。
         assert_eq!(epg_genre_get_text(0, 16), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // format_event_time / get_day_of_week_text
+    // -----------------------------------------------------------------------
+
+    /// 2024-04-01(月)を基準にしたテスト用時刻。
+    fn st(hour: u16, minute: u16) -> SystemTime {
+        SystemTime {
+            year: 2024,
+            month: 4,
+            day: 1,
+            day_of_week: 1, // 月曜
+            hour,
+            minute,
+            second: 0,
+            milliseconds: 0,
+        }
+    }
+
+    #[test]
+    fn test_get_day_of_week_text() {
+        assert_eq!(get_day_of_week_text(0), "日");
+        assert_eq!(get_day_of_week_text(1), "月");
+        assert_eq!(get_day_of_week_text(6), "土");
+        // 範囲外は全角「?」(Util.cpp:352-353)。
+        assert_eq!(get_day_of_week_text(-1), "\u{FF1F}");
+        assert_eq!(get_day_of_week_text(7), "\u{FF1F}");
+    }
+
+    #[test]
+    fn test_format_event_time_basic() {
+        // 通常書式は時をゼロ埋めしない("{}:{:02}"、EpgUtil.cpp:116)。
+        assert_eq!(
+            format_event_time(&st(9, 5), 3600, FormatEventTimeFlag::empty()),
+            "9:05\u{FF5E}10:05"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_hour_2digits() {
+        assert_eq!(
+            format_event_time(&st(9, 5), 3600, FormatEventTimeFlag::HOUR_2DIGITS),
+            "09:05\u{FF5E}10:05"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_cross_midnight() {
+        // 23:30 + 1時間 → 翌 0:30(OffsetSystemTime で日跨ぎ)。
+        assert_eq!(
+            format_event_time(&st(23, 30), 3600, FormatEventTimeFlag::empty()),
+            "23:30\u{FF5E}0:30"
+        );
+        assert_eq!(
+            format_event_time(&st(23, 30), 3600, FormatEventTimeFlag::HOUR_2DIGITS),
+            "23:30\u{FF5E}00:30"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_undecided() {
+        // Duration == 0 + UNDECIDED_TEXT →「(終了未定)」(EpgUtil.cpp:134-137)。
+        assert_eq!(
+            format_event_time(&st(20, 0), 0, FormatEventTimeFlag::UNDECIDED_TEXT),
+            "20:00\u{FF5E}(終了未定)"
+        );
+        // フラグ無しなら終了は空のまま「～」だけ付く(EpgUtil.cpp:140-145)。
+        assert_eq!(
+            format_event_time(&st(20, 0), 0, FormatEventTimeFlag::empty()),
+            "20:00\u{FF5E}"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_start_only() {
+        // StartOnly では終了時刻も「～」も付かない(Duration があっても)。
+        assert_eq!(
+            format_event_time(&st(20, 0), 3600, FormatEventTimeFlag::START_ONLY),
+            "20:00"
+        );
+        // StartOnly が優先され UNDECIDED_TEXT は無視される(EpgUtil.cpp:126)。
+        assert_eq!(
+            format_event_time(
+                &st(20, 0),
+                0,
+                FormatEventTimeFlag::START_ONLY | FormatEventTimeFlag::UNDECIDED_TEXT
+            ),
+            "20:00"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_date() {
+        // 日付は月日とも非ゼロ埋め + 曜日 + 空白(EpgUtil.cpp:105-110)。
+        assert_eq!(
+            format_event_time(&st(9, 0), 1800, FormatEventTimeFlag::DATE),
+            "4/1(月) 9:00\u{FF5E}9:30"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_date_year() {
+        // YEAR 併用で「年/」を前置(EpgUtil.cpp:100-104)。
+        assert_eq!(
+            format_event_time(
+                &st(9, 0),
+                1800,
+                FormatEventTimeFlag::DATE | FormatEventTimeFlag::YEAR
+            ),
+            "2024/4/1(月) 9:00\u{FF5E}9:30"
+        );
+        // YEAR のみ(DATE 無し)では日付部は付かない(EpgUtil.cpp:98)。
+        assert_eq!(
+            format_event_time(&st(9, 0), 1800, FormatEventTimeFlag::YEAR),
+            "9:00\u{FF5E}9:30"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_duration_minutes() {
+        // 秒単位の Duration(5分番組)。
+        assert_eq!(
+            format_event_time(&st(9, 58), 300, FormatEventTimeFlag::empty()),
+            "9:58\u{FF5E}10:03"
+        );
+    }
+
+    #[test]
+    fn test_format_event_time_flag_values() {
+        // EpgUtil.h:46-54 の値と一致すること。
+        assert_eq!(FormatEventTimeFlag::HOUR_2DIGITS.bits(), 0x0001);
+        assert_eq!(FormatEventTimeFlag::START_ONLY.bits(), 0x0002);
+        assert_eq!(FormatEventTimeFlag::DATE.bits(), 0x0004);
+        assert_eq!(FormatEventTimeFlag::YEAR.bits(), 0x0008);
+        assert_eq!(FormatEventTimeFlag::UNDECIDED_TEXT.bits(), 0x0010);
+        assert_eq!(FormatEventTimeFlag::NO_CONVERT.bits(), 0x0020);
+        assert_eq!(MAX_EVENT_TIME_LENGTH, 64);
     }
 }

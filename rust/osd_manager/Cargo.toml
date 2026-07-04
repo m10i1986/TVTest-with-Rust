@@ -1,0 +1,29 @@
+# TVTest の OSD 管理(src/OSDManager.cpp / src/OSDManager.h)の純粋ロジック部分を
+# 移植したクレート。OSDStyle 既定値と set/normalize、音量バーテキスト生成、
+# 各 OSD のフォントサイズ計算、テキスト OSD レイアウト決定、合成テキスト座標計算、
+# チャンネル OSD の表示モード/エフェクト判定、番組情報 OSD の表示時間などを扱う。
+# ウィンドウ生成・GDI 描画・AppMain/CoreEngine/ViewerFilter/LogoManager/CPseudoOSD への
+# 配線は対象外(呼び出し側の責務)。
+[package]
+name = "tvtest_osd_manager"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's OSD manager layout logic (COSDManager pure parts)"
+
+[lib]
+name = "tvtest_osd_manager"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+tvtest_style = { path = "../style" }
+tvtest_util = { path = "../util" }
+tvtest_osd_options = { path = "../osd_options" }
+tvtest_dpi_util = { path = "../dpi_util" }
+bitflags = "2"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+]
