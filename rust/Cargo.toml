@@ -74,6 +74,8 @@ members = [
     "channel_scan_sort",
     "panel_options",
     "notification_bar_options",
+    "taskbar_shared_properties",
+    "epg_options",
     "raw_input",
     "raw_input_win32",
     "ts_processor_filter_map",

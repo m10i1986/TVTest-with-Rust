@@ -1,0 +1,18 @@
+# TVTest の EpgOptions.cpp / EpgOptions.h の純粋部分を移植したクレート。
+# EPG/ロゴデータの保存・読み込み設定値のモデルと、CEpgFileLoader の非同期ロード状態機械
+# (STATE_READY 等 8 状態の遷移ロジックと IsLoading/IsEpgDataLoading の判定式)、
+# LoadEpgFile のロード可否判定(EpgFileLoadFlag とフラグ・パス存在確認の組み合わせ)を扱う。
+# DlgProc(ダイアログ)・CSettings I/O本体・実スレッド生成/待機・実ファイルI/Oは対象外。
+[package]
+name = "tvtest_epg_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's EPG/logo options load state machine and pure logic"
+
+[lib]
+name = "tvtest_epg_options"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"

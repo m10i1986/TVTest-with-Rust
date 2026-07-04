@@ -1,0 +1,18 @@
+# TVTest の TaskbarSharedProperties.cpp / TaskbarSharedProperties.h の純粋部分を移植したクレート。
+# タスクバー(ジャンプリスト等)と共有する「最近視聴したチャンネル」情報を、共有メモリ上の
+# 固定レイアウト構造体(SharedInfoHeader + RecentChannelInfo[])との間で変換するロジックを扱う。
+# チャンネル名・チューナー名は固定長 UTF-16 バッファへ切り詰めてコピーする(原実装の
+# StringCopy = wcsncpy_s(..., _TRUNCATE) 相当)。
+# CSharedMemory(共有メモリの作成・マップ・ロック)そのものはプラットフォーム依存のため対象外。
+[package]
+name = "tvtest_taskbar_shared_properties"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's taskbar shared properties recent channel (de)serialization"
+
+[lib]
+name = "tvtest_taskbar_shared_properties"
+path = "src/lib.rs"
+
+[dependencies]
