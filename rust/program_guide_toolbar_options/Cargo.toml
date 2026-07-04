@@ -1,0 +1,19 @@
+# TVTest の番組表ツールバー設定(src/ProgramGuideToolbarOptions.cpp / src/ProgramGuide.cpp の
+# CProgramGuideFrameSettings 実装部分、src/ProgramGuide.h の CProgramGuideFrameSettings 定義)の
+# 純粋部分を移植したクレート。ツールバー種別テーブル・ID⇔テキスト変換・表示順序の検証/構築・
+# 日付バー/時刻バー設定の範囲チェック、ReadSettings のツールバー順序パース(ver.0.9.0互換・
+# 重複排除・不足分補完)を扱う。
+# ダイアログ(DlgProc、CListView操作)・CSettings I/O本体・CProgramGuideFrame/CProgramGuideDisplay
+# への実適用は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_program_guide_toolbar_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's program guide toolbar options pure logic"
+
+[lib]
+name = "tvtest_program_guide_toolbar_options"
+path = "src/lib.rs"
+
+[dependencies]

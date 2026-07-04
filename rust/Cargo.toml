@@ -58,6 +58,8 @@ members = [
     "driver_manager",
     "taskbar_options",
     "audio_options",
+    "video_options",
+    "program_guide_toolbar_options",
     "osd_options",
     "view_options",
     "video_decoder_options",

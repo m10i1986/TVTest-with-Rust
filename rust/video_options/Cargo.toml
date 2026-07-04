@@ -1,0 +1,18 @@
+# TVTest の映像設定(src/VideoOptions.cpp / VideoOptions.h)の純粋部分を移植したクレート。
+# 映像レンダラ種別の列挙・名前⇔種別変換、表示ストレッチモードの列挙、設定値
+# ReadSettings のストレッチモード変換ロジック(FrameCut/FullscreenStretchMode/
+# MaximizeStretchMode の bool・整数値→enum)、更新フラグ定数を扱う。
+# ダイアログ(DlgProc)・CSettings I/O 本体・DirectShow(VideoRenderer::IsAvailable/
+# CreateRenderer)・デコーダ列挙(FilterFinder)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_video_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's video options pure logic: renderer table, stretch mode conversion"
+
+[lib]
+name = "tvtest_video_options"
+path = "src/lib.rs"
+
+[dependencies]
