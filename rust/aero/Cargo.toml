@@ -1,0 +1,26 @@
+# TVTest の Aero Glass / バッファードペイント(src/Aero.cpp / src/Aero.h)を windows-rs で
+# 移植したクレート。CAeroGlass(DWM コンポジション判定・クライアント領域へのグラス適用)、
+# CBufferedPaint(uxtheme のバッファードペイント RAII)、CDoubleBufferingDraw
+# (ダブルバッファリング描画の trait 化)を扱う。
+[package]
+name = "tvtest_aero"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's Aero Glass / buffered paint helpers using windows-rs"
+
+[lib]
+name = "tvtest_aero"
+path = "src/lib.rs"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls",
+    "Win32_UI_WindowsAndMessaging",
+]
