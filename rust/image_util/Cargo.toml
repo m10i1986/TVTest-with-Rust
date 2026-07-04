@@ -1,0 +1,16 @@
+# TVTest の画像処理(src/Image.cpp)の純粋部分を移植したクレート。
+# DIB ヘッダ/ビットサイズ計算(CalcDIBInfoSize/CalcDIBBitsSize/CalcDIBSize)、
+# バイト列ベースの画像縮小/切り出し(ResizeImage/CropImage)を扱う。
+# 画像コーデック(CImageCodec、DLL ロード依存)は対象外。
+[package]
+name = "tvtest_image_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's pure image processing helpers (DIB size calculation, resize/crop)"
+
+[lib]
+name = "tvtest_image_util"
+path = "src/lib.rs"
+
+[dependencies]
