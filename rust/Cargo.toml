@@ -73,6 +73,7 @@ members = [
     "side_bar_options",
     "channel_scan_sort",
     "panel_options",
+    "panel_form_layout",
     "notification_bar_options",
     "taskbar_shared_properties",
     "epg_options",
