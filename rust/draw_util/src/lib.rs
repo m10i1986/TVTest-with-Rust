@@ -39,7 +39,8 @@ use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BitBlt, CreateBitmap, CreateBrushIndirect, CreateCompatibleBitmap,
     CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, FillRect, GetCurrentObject, GetDC, GetDCPenColor, GetDIBColorTable,
+    DeleteObject, DrawTextW, FillRect, GdiAlphaBlend, GdiTransparentBlt, GetCurrentObject, GetDC,
+    GetDCPenColor, GetDIBColorTable,
     GetObjectW, GetStockObject, GetTextFaceW, GetTextMetricsW, GradientFill, LineTo, MoveToEx,
     ReleaseDC, SelectObject, SetBkMode, SetDCBrushColor, SetDCPenColor, SetDIBColorTable,
     SetStretchBltMode, SetTextColor, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BACKGROUND_MODE, BITMAP,
@@ -1971,6 +1972,192 @@ pub fn resize_bitmap(
     Some(hbm)
 }
 
+// ---------------------------------------------------------------------------
+// ビットマップ描画(DrawBitmap / DrawMonoColorDIB、DrawUtil.cpp:467-565)
+// ---------------------------------------------------------------------------
+
+/// ビットマップを描画する。原実装 `DrawBitmap`(DrawUtil.cpp:467)。
+///
+/// `src_rect` が `None` のときはビットマップ全体を転送元とする(原実装の
+/// 既定引数 `pSrcRect = nullptr`)。`opacity` が 255 なら等倍は `BitBlt`、
+/// 拡縮は `STRETCH_HALFTONE` の `StretchBlt` で転送する。255 未満なら
+/// `GdiAlphaBlend`(`SourceConstantAlpha = opacity`、ピクセルアルファなし)で
+/// 半透明合成する。`hdc`/`hbm` が無効なら `false`。
+#[allow(clippy::too_many_arguments)]
+pub fn draw_bitmap(
+    hdc: HDC,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    hbm: HBITMAP,
+    src_rect: Option<&RECT>,
+    opacity: u8,
+) -> bool {
+    if hdc.0.is_null() || hbm.0.is_null() {
+        return false;
+    }
+
+    // 転送元の位置とサイズ。None ならビットマップ全体。
+    let (src_x, src_y, src_width, src_height) = match src_rect {
+        Some(rc) => (rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top),
+        None => {
+            let mut bm = BITMAP::default();
+            // SAFETY: hbm は有効。BITMAP 情報を取得する。
+            let got = unsafe {
+                GetObjectW(
+                    HGDIOBJ(hbm.0),
+                    size_of::<BITMAP>() as i32,
+                    Some(&mut bm as *mut BITMAP as *mut c_void),
+                )
+            };
+            if got != size_of::<BITMAP>() as i32 {
+                return false;
+            }
+            (0, 0, bm.bmWidth, bm.bmHeight)
+        }
+    };
+
+    // SAFETY: hdc/hbm は有効。メモリ DC に選択して転送し、確実に破棄する。
+    unsafe {
+        let hdc_memory = CreateCompatibleDC(Some(hdc));
+        if hdc_memory.0.is_null() {
+            return false;
+        }
+        let hbm_old = SelectObject(hdc_memory, HGDIOBJ(hbm.0));
+
+        if opacity == 255 {
+            if src_width == dst_width && src_height == dst_height {
+                let _ = BitBlt(
+                    hdc,
+                    dst_x,
+                    dst_y,
+                    dst_width,
+                    dst_height,
+                    Some(hdc_memory),
+                    src_x,
+                    src_y,
+                    SRCCOPY,
+                );
+            } else {
+                let old_stretch_mode = SetStretchBltMode(hdc, STRETCH_HALFTONE);
+                let _ = StretchBlt(
+                    hdc, dst_x, dst_y, dst_width, dst_height, Some(hdc_memory), src_x, src_y,
+                    src_width, src_height, SRCCOPY,
+                );
+                SetStretchBltMode(hdc, STRETCH_BLT_MODE(old_stretch_mode));
+            }
+        } else {
+            let bf = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: opacity,
+                AlphaFormat: 0,
+            };
+            let _ = GdiAlphaBlend(
+                hdc, dst_x, dst_y, dst_width, dst_height, hdc_memory, src_x, src_y, src_width,
+                src_height, bf,
+            );
+        }
+
+        let _ = SelectObject(hdc_memory, hbm_old);
+        let _ = DeleteDC(hdc_memory);
+    }
+    true
+}
+
+/// 単色で画像(2 色 DIB)を描画する(転送元 DC 版)。原実装 `DrawMonoColorDIB`(DrawUtil.cpp:520)。
+///
+/// 転送元 DC に選択された DIB のカラーテーブルを、番号 0 = `color`(前景)、
+/// 番号 1 = [`mono_color_transparent`]`(color)`(透過色)に書き換え、
+/// `GdiTransparentBlt` で透過色を抜いて転送する。つまりパレット番号 0 の画素が
+/// `color` で描かれ、番号 1 の画素は背景が残る。`hdc_dst`/`hdc_src` が無効なら `false`。
+#[allow(clippy::too_many_arguments)]
+pub fn draw_mono_color_dib_dc(
+    hdc_dst: HDC,
+    dst_x: i32,
+    dst_y: i32,
+    hdc_src: HDC,
+    src_x: i32,
+    src_y: i32,
+    width: i32,
+    height: i32,
+    color: u32,
+) -> bool {
+    if hdc_dst.0.is_null() || hdc_src.0.is_null() {
+        return false;
+    }
+
+    let trans_color = mono_color_transparent(color);
+    let palette = [
+        RGBQUAD {
+            rgbBlue: get_b(color) as u8,
+            rgbGreen: get_g(color) as u8,
+            rgbRed: get_r(color) as u8,
+            rgbReserved: 0,
+        },
+        RGBQUAD {
+            rgbBlue: get_b(trans_color) as u8,
+            rgbGreen: get_g(trans_color) as u8,
+            rgbRed: get_r(trans_color) as u8,
+            rgbReserved: 0,
+        },
+    ];
+    // SAFETY: 双方の DC は有効。カラーテーブルを設定し透過転送する。
+    unsafe {
+        SetDIBColorTable(hdc_src, 0, &palette);
+        let _ = GdiTransparentBlt(
+            hdc_dst,
+            dst_x,
+            dst_y,
+            width,
+            height,
+            hdc_src,
+            src_x,
+            src_y,
+            width,
+            height,
+            trans_color,
+        );
+    }
+    true
+}
+
+/// 単色で画像(2 色 DIB)を描画する。原実装 `DrawMonoColorDIB`(HBITMAP 版、DrawUtil.cpp:546)。
+///
+/// `hbm` をメモリ DC に選択して [`draw_mono_color_dib_dc`] を呼ぶ。
+/// 原実装と同じく内側の呼び出しの結果は無視する。`hdc_dst`/`hbm` が無効なら `false`。
+#[allow(clippy::too_many_arguments)]
+pub fn draw_mono_color_dib(
+    hdc_dst: HDC,
+    dst_x: i32,
+    dst_y: i32,
+    hbm: HBITMAP,
+    src_x: i32,
+    src_y: i32,
+    width: i32,
+    height: i32,
+    color: u32,
+) -> bool {
+    if hdc_dst.0.is_null() || hbm.0.is_null() {
+        return false;
+    }
+    // SAFETY: hdc_dst/hbm は有効。メモリ DC に選択して描画し、確実に破棄する。
+    unsafe {
+        let hdc_mem = CreateCompatibleDC(Some(hdc_dst));
+        if hdc_mem.0.is_null() {
+            return false;
+        }
+        let hbm_old = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
+        let _ = draw_mono_color_dib_dc(
+            hdc_dst, dst_x, dst_y, hdc_mem, src_x, src_y, width, height, color,
+        );
+        let _ = SelectObject(hdc_mem, hbm_old);
+        let _ = DeleteDC(hdc_mem);
+    }
+    true
+}
+
 /// ビットマップ(`HBITMAP`)の RAII ラッパー。原実装 `DrawUtil::CBitmap`(DrawUtil.h:161)。
 ///
 /// `Drop`(`~CBitmap`)で破棄する。`Clone`(コピーコンストラクタ/代入、DrawUtil.cpp:1007)は
@@ -3175,7 +3362,7 @@ impl Default for MonoColorIconList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::Graphics::Gdi::STRETCH_HALFTONE;
+    use windows::Win32::Graphics::Gdi::{GetPixel, STRETCH_HALFTONE};
 
     // ----- RGBA -----
 
@@ -3910,6 +4097,228 @@ mod tests {
         let mut b = Bitmap::new();
         assert!(b.create(8, 8, 32));
         assert!(resize_bitmap(b.handle(), 0, 10, 24, STRETCH_HALFTONE).is_none());
+    }
+
+    // ----- draw_bitmap / draw_mono_color_dib -----
+
+    #[test]
+    fn test_draw_bitmap_invalid_handles() {
+        let off = make_offscreen(4, 4);
+        let mut b = Bitmap::new();
+        assert!(b.create(2, 2, 32));
+        assert!(!draw_bitmap(HDC::default(), 0, 0, 2, 2, b.handle(), None, 255));
+        assert!(!draw_bitmap(off.dc(), 0, 0, 2, 2, HBITMAP::default(), None, 255));
+    }
+
+    #[test]
+    fn test_draw_bitmap_equal_size_opaque() {
+        unsafe {
+            // 2x2 全画素 赤(BGRA = [0, 0, 0xFF, 0])。
+            let bytes = [0u8, 0, 0xFF, 0].repeat(4);
+            let src = make_src_32(2, 2, &bytes);
+            let off = make_offscreen(4, 4);
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: 4,
+                bottom: 4,
+            };
+            assert!(fill(off.dc(), &rc, WHITE));
+            // src_rect = None(全体)かつ等倍 → BitBlt 経路。
+            assert!(draw_bitmap(off.dc(), 1, 1, 2, 2, src, None, 255));
+            let _ = DeleteObject(HGDIOBJ(src.0));
+            // 描画域(1,1)-(2,2) は赤、その外は白のまま。
+            assert_eq!(GetPixel(off.dc(), 1, 1).0, 0x0000_00FF);
+            assert_eq!(GetPixel(off.dc(), 2, 2).0, 0x0000_00FF);
+            assert_eq!(GetPixel(off.dc(), 0, 0).0, WHITE);
+            assert_eq!(GetPixel(off.dc(), 3, 3).0, WHITE);
+        }
+    }
+
+    #[test]
+    fn test_draw_bitmap_stretch_opaque() {
+        unsafe {
+            // 2x1 全画素 青(BGRA = [0xFF, 0, 0, 0])。
+            let bytes = [0xFFu8, 0, 0, 0].repeat(2);
+            let src = make_src_32(2, 1, &bytes);
+            let off = make_offscreen(4, 4);
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: 4,
+                bottom: 4,
+            };
+            assert!(fill(off.dc(), &rc, WHITE));
+            // 2x1 → 4x2 の拡大 → STRETCH_HALFTONE の StretchBlt 経路。
+            assert!(draw_bitmap(off.dc(), 0, 0, 4, 2, src, None, 255));
+            let _ = DeleteObject(HGDIOBJ(src.0));
+            // 単色ソースなので拡大後も同色。
+            assert_eq!(GetPixel(off.dc(), 0, 0).0, 0x00FF_0000);
+            assert_eq!(GetPixel(off.dc(), 3, 1).0, 0x00FF_0000);
+            // 描画域外は白のまま。
+            assert_eq!(GetPixel(off.dc(), 0, 2).0, WHITE);
+        }
+    }
+
+    #[test]
+    fn test_draw_bitmap_src_rect() {
+        unsafe {
+            // 2x1: 画素0 = 赤、画素1 = 青。
+            let bytes = [0u8, 0, 0xFF, 0, 0xFF, 0, 0, 0];
+            let src = make_src_32(2, 1, &bytes);
+            let off = make_offscreen(2, 1);
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: 2,
+                bottom: 1,
+            };
+            assert!(fill(off.dc(), &rc, WHITE));
+            // 右半分(青)のみを等倍転送。
+            let src_rc = RECT {
+                left: 1,
+                top: 0,
+                right: 2,
+                bottom: 1,
+            };
+            assert!(draw_bitmap(off.dc(), 0, 0, 1, 1, src, Some(&src_rc), 255));
+            let _ = DeleteObject(HGDIOBJ(src.0));
+            assert_eq!(GetPixel(off.dc(), 0, 0).0, 0x00FF_0000);
+            assert_eq!(GetPixel(off.dc(), 1, 0).0, WHITE);
+        }
+    }
+
+    #[test]
+    fn test_draw_bitmap_alpha_blend() {
+        unsafe {
+            // 2x2 全画素 赤を黒背景に不透明度 128 で合成 → R ≒ 128。
+            let bytes = [0u8, 0, 0xFF, 0].repeat(4);
+            let src = make_src_32(2, 2, &bytes);
+            let off = make_offscreen(2, 2);
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: 2,
+                bottom: 2,
+            };
+            assert!(fill(off.dc(), &rc, 0x0000_0000));
+            assert!(draw_bitmap(off.dc(), 0, 0, 2, 2, src, None, 128));
+            let _ = DeleteObject(HGDIOBJ(src.0));
+            let c = GetPixel(off.dc(), 0, 0).0;
+            // 255 * 128 / 255 = 128(GDI の丸め差を考慮して ±1 許容)。
+            let r = c & 0xFF;
+            assert!((127..=129).contains(&r), "r = {r}");
+            // G/B は 0 のまま。
+            assert_eq!(c & 0x00FF_FF00, 0);
+        }
+    }
+
+    #[test]
+    fn test_draw_mono_color_dib_pixels() {
+        unsafe {
+            // 8x1 の 1bpp DIB。1 バイト目 0b11110000:
+            // 画素 0..4 = パレット番号 1(透過)、画素 4..8 = 番号 0(前景)。
+            let (hbm, bits) = create_dib_with_bits(8, 1, 1).unwrap();
+            *(bits as *mut u8) = 0b1111_0000;
+            let off = make_offscreen(8, 1);
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: 8,
+                bottom: 1,
+            };
+            assert!(fill(off.dc(), &rc, WHITE));
+            let color = 0x0000_00FF; // 赤
+            assert!(draw_mono_color_dib(off.dc(), 0, 0, hbm, 0, 0, 8, 1, color));
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            // 番号 1 の画素は透過で背景(白)が残り、番号 0 の画素は前景色。
+            for x in 0..4 {
+                assert_eq!(GetPixel(off.dc(), x, 0).0, WHITE, "x = {x}");
+            }
+            for x in 4..8 {
+                assert_eq!(GetPixel(off.dc(), x, 0).0, color, "x = {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_draw_mono_color_dib_dc_pixels() {
+        unsafe {
+            // HDC 版。ビット反転(0b00001111)で前景/透過を入れ替えて検証。
+            let (hbm, bits) = create_dib_with_bits(8, 1, 1).unwrap();
+            *(bits as *mut u8) = 0b0000_1111;
+            let off = make_offscreen(8, 1);
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: 8,
+                bottom: 1,
+            };
+            assert!(fill(off.dc(), &rc, WHITE));
+            let hdc_src = CreateCompatibleDC(None);
+            assert!(!hdc_src.0.is_null());
+            let old = SelectObject(hdc_src, HGDIOBJ(hbm.0));
+            let color = 0x00FF_0000; // 青
+            assert!(draw_mono_color_dib_dc(off.dc(), 0, 0, hdc_src, 0, 0, 8, 1, color));
+            let _ = SelectObject(hdc_src, old);
+            let _ = DeleteDC(hdc_src);
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
+            for x in 0..4 {
+                assert_eq!(GetPixel(off.dc(), x, 0).0, color, "x = {x}");
+            }
+            for x in 4..8 {
+                assert_eq!(GetPixel(off.dc(), x, 0).0, WHITE, "x = {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_draw_mono_color_dib_invalid_handles() {
+        let off = make_offscreen(4, 4);
+        assert!(!draw_mono_color_dib(
+            HDC::default(),
+            0,
+            0,
+            HBITMAP::default(),
+            0,
+            0,
+            1,
+            1,
+            0
+        ));
+        assert!(!draw_mono_color_dib(
+            off.dc(),
+            0,
+            0,
+            HBITMAP::default(),
+            0,
+            0,
+            1,
+            1,
+            0
+        ));
+        assert!(!draw_mono_color_dib_dc(
+            off.dc(),
+            0,
+            0,
+            HDC::default(),
+            0,
+            0,
+            1,
+            1,
+            0
+        ));
+        assert!(!draw_mono_color_dib_dc(
+            HDC::default(),
+            0,
+            0,
+            off.dc(),
+            0,
+            0,
+            1,
+            1,
+            0
+        ));
     }
 
     // ----- UxTheme -----
