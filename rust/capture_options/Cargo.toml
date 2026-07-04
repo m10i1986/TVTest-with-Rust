@@ -1,0 +1,19 @@
+# TVTest のキャプチャ設定(src/CaptureOptions.cpp / CaptureOptions.h)の純粋部分を移植した
+# クレート。サイズ種別(SIZE_TYPE_*)の範囲チェックと旧設定互換の読み替え(RAW→ORIGINAL)、
+# プリセットサイズ・パーセンテージのテーブル引き検索、単一整数(コンボボックスのインデックス)
+# と (サイズ種別, サイズインデックス, パーセンテージインデックス) 相互変換を扱う。ダイアログ
+# (DlgProc)・CSettings I/O 本体・GenerateFileName/GetCommentText 等の VariableString/ファイル
+# システム連携・SaveImage(CImageCodec)・CCaptureVariableStringMap・OpenSaveFolder の
+# ShellExecute は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_capture_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's capture options pure logic: size/percentage tables and preset size conversion"
+
+[lib]
+name = "tvtest_capture_options"
+path = "src/lib.rs"
+
+[dependencies]

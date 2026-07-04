@@ -1,0 +1,18 @@
+# TVTest のタスクバー設定(src/TaskbarOptions.cpp / TaskbarOptions.h)の純粋部分を移植したクレート。
+# ジャンプリスト有効判定、タスク一覧文字列(区切り値)のパース(コマンドID解決は呼び出し側の
+# TaskCommandResolver trait に委譲)、既定タスク一覧を扱う。CSettings I/O 本体・
+# CCommandManager 実装・TaskbarManager(ジャンプリスト再構築)は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_taskbar_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's taskbar options pure logic: jump list enabled check, task list parsing"
+
+[lib]
+name = "tvtest_taskbar_options"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_string_utility = { path = "../string_utility" }
+tvtest_command = { path = "../command" }

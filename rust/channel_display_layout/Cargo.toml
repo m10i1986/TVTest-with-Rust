@@ -1,0 +1,17 @@
+# TVTest の ChannelDisplay.cpp(CChannelDisplay)のチューナー/チャンネル一覧の
+# 等間隔グリッドレイアウト計算を移植したクレート。
+# アイテム矩形の算出(GetTunerItemRect/GetChannelItemRect)と、座標からアイテムの
+# インデックスを解決するヒットテスト(TunerItemHitTest/ChannelItemHitTest)を扱う。
+# 実際のウィンドウ生成・GDI描画・スクロールバー制御自体は対象外。
+[package]
+name = "tvtest_channel_display_layout"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's channel display grid layout and hit-test logic"
+
+[lib]
+name = "tvtest_channel_display_layout"
+path = "src/lib.rs"
+
+[dependencies]

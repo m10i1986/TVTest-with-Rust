@@ -1,0 +1,16 @@
+# TVTest の PanelForm.cpp(CPanelForm)のタブレイアウト/索引解決ロジックを移植したクレート。
+# パネルフォームのタブ(ID/表示順/表示可否)の管理、タブ幅の算出(フォント計測結果を
+# 引数として受け取る)、表示中タブ列でのヒットテスト(座標→タブID)を扱う。
+# 実際のウィンドウ生成・GDI描画・フォント計測(GetTextExtentPoint32等)自体は対象外。
+[package]
+name = "tvtest_panel_form_layout"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's panel form tab layout and hit-test logic"
+
+[lib]
+name = "tvtest_panel_form_layout"
+path = "src/lib.rs"
+
+[dependencies]

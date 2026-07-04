@@ -1,0 +1,17 @@
+# TVTest の通知バー設定(src/NotificationBarOptions.cpp / src/NotificationBarOptions.h)の
+# 純粋部分を移植したクレート。NOTIFY_* フラグ定数、既定フラグ、通知の有効/無効切り替え
+# (EnableNotify/IsNotifyEnabled)、既定の通知バー表示時間(ミリ秒)を扱う。DlgProc・
+# CSettings I/O 本体・Style::CStyleManager によるフォント既定値算出・CreateDialogWindow
+# は Win32 依存のため対象外。
+[package]
+name = "tvtest_notification_bar_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's notification bar options pure logic: notify flag bitmask enable/disable"
+
+[lib]
+name = "tvtest_notification_bar_options"
+path = "src/lib.rs"
+
+[dependencies]

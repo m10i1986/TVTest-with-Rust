@@ -1,0 +1,17 @@
+# TVTest のビデオデコーダ設定(src/VideoDecoderOptions.cpp / VideoDecoderOptions.h)の
+# 純粋部分を移植したクレート。CSettings::GetEntries で取得したプロパティ値文字列を
+# VARIANT(VT_BOOL / VT_INT)相当の値へ変換するロジック(ReadSettings)を扱う。
+# ダイアログ・CSettings I/O 本体・ApplyVideoDecoderSettings の LibISDB::ViewerFilter
+# 連携・KnownDecoderManager::VideoDecoderSettings 本体は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_video_decoder_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's video decoder options pure logic: property value string to VARIANT-like value conversion"
+
+[lib]
+name = "tvtest_video_decoder_options"
+path = "src/lib.rs"
+
+[dependencies]

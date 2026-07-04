@@ -1,0 +1,18 @@
+# TVTest のステータスバー設定(src/StatusOptions.cpp / src/StatusOptions.h)の純粋部分を移植した
+# クレート。STATUS_ITEM_* の ID 定数、既定の項目一覧(DefaultItemList)、ReadSettings の
+# Item{}_ID 文字列パース(数値 ID 判定・範囲チェック・大小無視の重複排除・m_AvailItemList
+# からの既定可視性引き継ぎ・未出現項目の追加)、PopupOpacity のクランプを扱う。DlgProc・
+# CSettings I/O 本体・CStatusView/CItemListSubclass/DPI・フォントの StyleUtil 連携・
+# ApplyOptions/ApplyItemList 等の UI 適用処理は対象外でプラットフォーム非依存。
+[package]
+name = "tvtest_status_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's status options pure logic: item list resolution, ID parsing, popup opacity clamp"
+
+[lib]
+name = "tvtest_status_options"
+path = "src/lib.rs"
+
+[dependencies]

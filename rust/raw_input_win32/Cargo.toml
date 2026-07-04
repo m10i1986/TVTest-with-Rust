@@ -1,0 +1,25 @@
+# TVTest のリモコンキー(Raw Input HID)処理(src/RawInput.cpp / src/RawInput.h)のうち
+# Win32 Raw Input API 本体を windows-rs で移植したクレート。Initialize
+# (RegisterRawInputDevices)・OnInput(GetRawInputData による WM_INPUT メッセージ解析)を
+# 扱う。データ値⇔表示テキストのテーブル・KeyDataToIndex 等の純粋ロジックは
+# tvtest_raw_input クレートに分離済み(winutil/tvtest_util の分割方針を踏襲)。
+[package]
+name = "tvtest_raw_input_win32"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's raw input Win32 API layer (RegisterRawInputDevices/GetRawInputData) using windows-rs"
+
+[lib]
+name = "tvtest_raw_input_win32"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_raw_input = { path = "../raw_input" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_Input",
+]

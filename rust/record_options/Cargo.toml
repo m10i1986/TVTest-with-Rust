@@ -1,0 +1,18 @@
+# TVTest の録画設定(src/RecordOptions.cpp / RecordOptions.h)の純粋部分を移植した
+# クレート。書き出し/さかのぼり録画/書き出し待ちバッファサイズのクランプ処理、
+# 低空き容量しきい値のバイト変換、ステータスバー録画コマンドの解決・書き込み判定、
+# 保存先ファイルパス長チェックを扱う。CSettings I/O 本体・DlgProc・確認メッセージ
+# ボックス・ファイルパス結合(PathCombine)・Apply(RecordManager 連携)は対象外。
+[package]
+name = "tvtest_record_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's record options pure logic: buffer size clamping, status bar command resolution"
+
+[lib]
+name = "tvtest_record_options"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_command = { path = "../command" }

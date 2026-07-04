@@ -1,0 +1,19 @@
+# TVTest の操作設定(src/OperationOptions.cpp / OperationOptions.h)の純粋部分を
+# 移植したクレート。ホイール操作コマンドの ver.0.9.0 より前との互換用インデックス
+# 変換(WheelModeList 引き)、WheelChannelDelay の下限クランプ、ホイール操作の反転
+# 判定(IsWheelCommandReverse)を扱う。ダイアログ(DlgProc)・CSettings I/O 本体・
+# WheelCommandManager::ParseCommand/GetCommandParsableName によるコマンド名文字列の
+# 解決・CCommandManager::ParseIDText/GetCommandIDText 呼び出しは対象外(既に
+# rust/command, rust/wheel_command クレートに実装済みのためそちらに委譲)。
+[package]
+name = "tvtest_operation_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's operation options pure logic: legacy wheel mode index mapping, wheel channel delay clamp, wheel command reverse judgement"
+
+[lib]
+name = "tvtest_operation_options"
+path = "src/lib.rs"
+
+[dependencies]

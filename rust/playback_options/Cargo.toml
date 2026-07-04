@@ -1,0 +1,16 @@
+# TVTest の再生設定(src/PlaybackOptions.cpp / PlaybackOptions.h)の純粋部分を移植した
+# クレート。パケットバッファ長・バッファプール割合・ストリームスレッド優先度のクランプ処理、
+# ミュート/1セグモードの起動時復元判定、更新フラグ定数を扱う。ダイアログ(DlgProc)・
+# CSettings I/O 本体・Apply の CoreEngine/ViewerFilter/BonDriverSourceFilter 連携は対象外。
+[package]
+name = "tvtest_playback_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's playback options pure logic: buffer/priority clamping, startup restore flags"
+
+[lib]
+name = "tvtest_playback_options"
+path = "src/lib.rs"
+
+[dependencies]

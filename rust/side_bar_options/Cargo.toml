@@ -1,0 +1,19 @@
+# TVTest のサイドバー設定(src/SideBarOptions.cpp / SideBarOptions.h)の純粋部分を移植した
+# クレート。表示位置(PlaceType)・ポップアップ不透明度・アイテム一覧(ItemList)・既定アイテム
+# 一覧(DefaultItemList)の定数化と、ReadSettings のうち純粋なクランプ/範囲チェックロジック
+# (PopupOpacity・Place・ItemCount)、IsAvailableItem の線形検索を扱う。DlgProc・CSettings I/O
+# 本体・CreateImage/CreateIconImageList 等のアイコン画像生成・UpdateListViewIcons/SetItemList
+# 等の UI 更新・RegisterCommand・ApplySideBarOptions/ApplyItemList・OnDarkModeChanged は
+# Win32 依存のため対象外。
+[package]
+name = "tvtest_side_bar_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's side bar options pure logic: place/opacity clamping, item list tables, availability lookup"
+
+[lib]
+name = "tvtest_side_bar_options"
+path = "src/lib.rs"
+
+[dependencies]

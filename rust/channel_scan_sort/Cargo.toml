@@ -1,0 +1,18 @@
+# TVTest のチャンネルスキャン結果リストビューのソート比較(src/ChannelScan.cpp /
+# ChannelScan.h の CChannelScan::CChannelListSort::CompareFunc)を移植したクレート。
+# 列種別に応じた比較ロジックのみを純粋関数として提供し、ListView_SortItems の呼び出し・
+# UpdateChannelList の ListView 操作・ダイアログ全般は対象外。
+[package]
+name = "tvtest_channel_scan_sort"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's channel scan list sort comparison (CChannelScan::CChannelListSort::CompareFunc)"
+
+[lib]
+name = "tvtest_channel_scan_sort"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_channel_list = { path = "../channel_list" }
+tvtest_network_definition = { path = "../network_definition" }

@@ -1,0 +1,18 @@
+# TVTest の全般設定(src/GeneralOptions.cpp / GeneralOptions.h)の純粋部分を移植したクレート。
+# 既定使用 BonDriver の種別(DefaultDriverType)と範囲検証(CheckEnumRange)、種別に応じて
+# 最初に使う BonDriver 名を決定する GetFirstDriverName、常駐化/ワンセグフォールバック更新用の
+# ビットフラグ定数を扱う。ダイアログ(DlgProc)・CSettings I/O 本体・DriverManager/CoreEngine
+# 連携の Apply・ファイルパス解決処理(PathIsRelative/PathCanonicalize)は対象外でプラット
+# フォーム非依存。
+[package]
+name = "tvtest_general_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's general options pure logic: default driver type and first driver name resolution"
+
+[lib]
+name = "tvtest_general_options"
+path = "src/lib.rs"
+
+[dependencies]

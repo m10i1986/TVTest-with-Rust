@@ -1,0 +1,21 @@
+# TVTest の TS プロセッサ(録画補正フィルタ)チューナー別マッピング(src/TSProcessorManager.cpp
+# / src/TSProcessorManager.h の CTSProcessorSettings / TunerFilterInfo)の純粋部分を移植した
+# クレート。TunerFilterInfo/FilterInfo 構造体、チューナー名+NID/TSID/SID 条件によるマップ
+# 検索(GetTunerFilterInfo)、有効判定(IsTunerFilterMapEnabled)、チューナー切り替え時に
+# フィルタを閉じる/モジュールをアンロードすべきかの判定(OnTunerChange の純粋部分)を扱う。
+# ReadSettings/WriteSettings の CSettings I/O、CoreEngine/CTSProcessor 本体の
+# 生成・破棄・GUID 取得・COM フィルタ操作は対象外。PathMatchSpec/PathFindFileName/
+# IsEqualFileName は既存の tvtest_driver_manager クレートを再利用する。
+[package]
+name = "tvtest_ts_processor_filter_map"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's TS processor tuner filter map lookup and tuner-change filter action logic"
+
+[lib]
+name = "tvtest_ts_processor_filter_map"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_driver_manager = { path = "../driver_manager" }

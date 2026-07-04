@@ -1,0 +1,20 @@
+# TVTest のパネル設定(src/PanelOptions.cpp / src/PanelOptions.h)の純粋部分を移植した
+# クレート。パネル ID 定数(PANEL_ID_*)、既定アイテム一覧(DefaultItemList)、ID文字列
+# ⇔インデックス解決(GetItemIDFromIDText/CompareID)、初期タブ決定(GetInitialTab)、
+# アイテム登録・可視性設定・取得(RegisterPanelItem/SetPanelItemVisibility/
+# GetPanelItemVisibility)、タブ順序構築(ApplyItemList の TabOrder 計算部分)、
+# ReadSettings の ID 文字列パース(数値/テキスト判定・範囲チェック・重複排除)を扱う。
+# DlgProc・CSettings I/O 本体・CPanelForm への実適用(SetTabVisible/SetTabOrder 呼び出し
+# 自体)・StyleUtil のフォント設定・CListView 操作は Win32 依存のため対象外。
+[package]
+name = "tvtest_panel_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's panel options pure logic: item list resolution, ID parsing, initial tab, tab order"
+
+[lib]
+name = "tvtest_panel_options"
+path = "src/lib.rs"
+
+[dependencies]

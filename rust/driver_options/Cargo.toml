@@ -1,0 +1,19 @@
+# TVTest のドライバ設定(src/DriverOptions.cpp / DriverOptions.h)の純粋部分を移植した
+# クレート。DRIVER_FLAG_* フラグ定数、CDriverSettings::SetInitialChannelType 相当の
+# 初期チャンネル種別の範囲検証、Driver{i}_Options / Driver{i}_OptionsMask のフラグの
+# デコード/エンコード、Driver{i}_LastStatus のデコード/エンコード、GetInitialChannel の
+# チャンネル情報構築ロジックを扱う。ダイアログ(DlgProc)・CSettings I/O 本体・
+# CDriverSettingList/CDriverSettings 自体のオブジェクト管理・IsEqualFileName による
+# Find 検索・DriverManager 連携は対象外。
+[package]
+name = "tvtest_driver_options"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's driver options pure logic: flag decode/encode, initial channel type validation, initial channel resolution"
+
+[lib]
+name = "tvtest_driver_options"
+path = "src/lib.rs"
+
+[dependencies]

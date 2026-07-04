@@ -1,0 +1,17 @@
+# TVTest のリモコンキー(Raw Input HID)処理(src/RawInput.cpp / src/RawInput.h)の純粋部分
+# を移植したクレート。KeyList テーブル(HID データ値⇔表示テキスト)、NumKeyTypes/GetKeyText/
+# GetKeyData によるインデックスアクセス、KeyDataToIndex の線形検索を扱う。Initialize
+# (RegisterRawInputDevices)・OnInput(GetRawInputData による WM_INPUT メッセージ解析)は
+# Win32 Raw Input API 依存のため対象外。
+[package]
+name = "tvtest_raw_input"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's raw input key table lookup logic"
+
+[lib]
+name = "tvtest_raw_input"
+path = "src/lib.rs"
+
+[dependencies]
