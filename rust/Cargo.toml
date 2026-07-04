@@ -76,6 +76,7 @@ members = [
     "panel_form_layout",
     "channel_display_layout",
     "favorites_channel_provider",
+    "program_list_panel_layout",
     "notification_bar_options",
     "taskbar_shared_properties",
     "epg_options",

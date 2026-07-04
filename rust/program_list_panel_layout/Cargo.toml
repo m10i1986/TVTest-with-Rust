@@ -1,0 +1,16 @@
+# TVTest の ProgramListPanel.cpp(CProgramListPanel)のうち、ヘッダー/番組リストの
+# 矩形算出・ヒットテスト・行数ベースのアイテム位置計算・スクロール範囲計算を
+# 移植したクレート。テキスト折返し行数の計測(CalcDimensions、HDC必須)自体は
+# 対象外で、呼び出し側が事前計算した行数を入力として受け取る設計。
+[package]
+name = "tvtest_program_list_panel_layout"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's program list panel geometry and hit-test logic"
+
+[lib]
+name = "tvtest_program_list_panel_layout"
+path = "src/lib.rs"
+
+[dependencies]
