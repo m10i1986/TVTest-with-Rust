@@ -652,7 +652,7 @@ fn parse_channel_line(line: &str) -> Option<ChannelInfo> {
             }
         }
         ch.name = name;
-        rest = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
+        rest = rest.trim_start_matches([' ', '\t']);
         name_end = true;
     } else {
         if let Some(comma) = rest.find(',') {
@@ -728,9 +728,9 @@ fn parse_channel_line(line: &str) -> Option<ChannelInfo> {
 
 /// 原実装 SkipSpaces+NextToken:945-963。カンマをスキップしてポインタを進める。
 fn next_token(s: &str) -> Option<&str> {
-    let s = s.trim_start_matches(|c: char| c == ' ' || c == '\t');
+    let s = s.trim_start_matches([' ', '\t']);
     let s = s.strip_prefix(',')?;
-    Some(s.trim_start_matches(|c: char| c == ' ' || c == '\t'))
+    Some(s.trim_start_matches([' ', '\t']))
 }
 
 /// 原実装 ParseDigits:970-976。先頭の十進数字列を整数としてパースし、残りを返す。
