@@ -74,6 +74,8 @@ members = [
     "channel_scan_sort",
     "panel_options",
     "panel_form_layout",
+    "channel_display_layout",
+    "favorites_channel_provider",
     "notification_bar_options",
     "taskbar_shared_properties",
     "epg_options",

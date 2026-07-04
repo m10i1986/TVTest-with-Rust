@@ -1,0 +1,22 @@
+# TVTest の Epg.cpp(CEpg::CChannelProviderManager::CFavoritesChannelProvider)の
+# お気に入りチャンネル一覧のグループ化ロジックを移植したクレート。
+# お気に入りフォルダ階層をグループ(フォルダ単位でチャンネルを平坦化した集合)の
+# 配列へ変換し、グループ ID(フォルダパス文字列)⇔配列インデックスの相互変換を扱う。
+# CProgramGuideBaseChannelProvider への実際の配線・BonDriver 起動判定自体は対象外。
+[package]
+name = "tvtest_favorites_channel_provider"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's favorites channel provider grouping logic"
+
+[lib]
+name = "tvtest_favorites_channel_provider"
+path = "src/lib.rs"
+
+[dependencies]
+tvtest_favorites = { path = "../favorites" }
+tvtest_string_utility = { path = "../string_utility" }
+
+[dev-dependencies]
+tvtest_channel_list = { path = "../channel_list" }
