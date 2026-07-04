@@ -1,0 +1,25 @@
+# TVTest のグラフィックス基盤(src/Graphics.cpp / src/Graphics.h)を windows-rs の
+# GDI+ flat API(Win32_Graphics_GdiPlus)で移植したクレート。CGraphicsCore(GdiplusStartup/
+# Shutdown RAII)、CImage(GpBitmap)、CBrush(GpSolidFill)、CFont(GpFont)、
+# CCanvas(GpGraphics: 描画/テキスト描画/計測)を扱う。PseudoOSD/OSDManager 移植の前提となる。
+[package]
+name = "tvtest_graphics"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's graphics layer (GDI+ core/image/brush/font/canvas) using windows-rs"
+
+[lib]
+name = "tvtest_graphics"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "2"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
+]

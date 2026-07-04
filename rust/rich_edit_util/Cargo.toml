@@ -1,0 +1,16 @@
+# TVTest のリッチエディットユーティリティ(src/RichEditUtil.cpp / src/RichEditUtil.h)の
+# 純粋部分を移植したクレート。URL 検出(SearchNextURL/DetectURL の走査部)、
+# URL 文字の全角→半角変換、リンクヒットテスト等を扱う。
+# RichEdit コントロール操作(SendMessage 系)は対象外。
+[package]
+name = "tvtest_rich_edit_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's rich edit utilities (URL detection, pure parts)"
+
+[lib]
+name = "tvtest_rich_edit_util"
+path = "src/lib.rs"
+
+[dependencies]

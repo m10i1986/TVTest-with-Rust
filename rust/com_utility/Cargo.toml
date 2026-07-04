@@ -1,0 +1,25 @@
+# TVTest の COM ユーティリティ(src/ComUtility.cpp / src/ComUtility.h)を windows-rs で
+# 移植したクレート。CVariant(VARIANT の RAII ラッパー: VariantInit/VariantClear/
+# VariantCopy/VariantChangeType、ToString/FromString)と CPropertyBag(プロパティ管理)を扱う。
+# CPropertyPageSite/CPropertyPageFrame/ShowPropertyPageFrame(ダイアログ UI)は対象外。
+[package]
+name = "tvtest_com_utility"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's COM utilities (VARIANT RAII wrapper, property bag) using windows-rs"
+
+[lib]
+name = "tvtest_com_utility"
+path = "src/lib.rs"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+]
