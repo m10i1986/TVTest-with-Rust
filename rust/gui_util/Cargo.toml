@@ -1,0 +1,28 @@
+# TVTest の GUI ユーティリティ(src/GUIUtil.cpp / src/GUIUtil.h)を windows-rs で移植した
+# クレート。CIcon(HICON の RAII ラッパー: コピー時は CopyIcon、破棄時は DestroyIcon)、
+# CreateImageListFromIcons・SetWindowIcon 等アイコン/イメージリスト操作を扱う。
+# winutil に続き、GUI 層の Win32 API 呼び出しを windows-rs で本格移植する方針の一環。
+[package]
+name = "tvtest_gui_util"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Rust port of TVTest's GUI utilities (icon RAII wrapper, image list/icon helpers) using windows-rs"
+
+[lib]
+name = "tvtest_gui_util"
+path = "src/lib.rs"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+tvtest_icon_util = { path = "../icon_util" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
+    "Win32_Graphics_Gdi",
+]
